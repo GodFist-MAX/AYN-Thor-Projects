@@ -1,0 +1,19 @@
+#version 450
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_ballot : require
+layout(local_size_x = 128) in;
+layout(std430, binding = 0) buffer Out { uvec4 v[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint id = gl_SubgroupInvocationID;
+    uint total = subgroupAdd(1u);
+    uint prefix = subgroupInclusiveAdd(1u);
+    uint xorv = subgroupShuffleXor(id, 1u);
+    uint first = subgroupBroadcastFirst(i);
+    uvec4 ballot = subgroupBallot(true);
+    uint bits = subgroupBallotBitCount(ballot);
+    uint flags = (xorv == (id ^ 1u) ? 1u : 0u) | (first == i - id ? 2u : 0u) | (bits == total ? 4u : 0u);
+    v[i] = uvec4(gl_SubgroupSize, total, prefix - id, flags);
+}
