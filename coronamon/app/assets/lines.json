@@ -1,0 +1,242 @@
+{
+  "sources": {
+    "ts": "Digimon Story: Time Stranger (2025) - Coronamon's dialogue",
+    "move": "Coronamon's attack names (Digimon games and anime)",
+    "": "Original lines written in Coronamon's voice for this app"
+  },
+  "lines": {
+    "greet": [
+      ["ts", "There you are! I'm glad you all made it!"],
+      ["", "Morning! The sun's up, and so am I!"],
+      ["", "Coronamon, reporting for duty! Let's make today blazing!"],
+      ["", "Hey hey! Your Thor's in good hands. Well... good paws."],
+      ["", "I'm back! Did anything crash while I was gone? ...No? Good."]
+    ],
+    "tap": [
+      ["ts", "...Huh?"],
+      ["ts", "What was that you said?"],
+      ["", "Hm? Need something? I'm all ears! ...And mane."],
+      ["", "Hey! That tickles!"],
+      ["", "You called? Coronamon's on it!"],
+      ["", "Want to see a Corona Knuckle? Just say the word!"],
+      ["", "All quiet on the Thor front. I checked!"],
+      ["", "Psst. Grok and I make a pretty good team, huh?"],
+      ["", "Every app here is under my protection. Every. Single. One."],
+      ["", "Long-press me if you wanna pet the mane. I won't tell anyone."]
+    ],
+    "poke": [
+      ["ts", "I dare you to call me that one more time!"],
+      ["ts", "What did you say?!"],
+      ["ts", "I'm no coward! And I'll prove it to you!"],
+      ["", "Hey! A warrior's mane is NOT a button!"],
+      ["", "Keep that up and I'll Corona Knuckle your home screen!"],
+      ["", "Okay, okay, I'm paying attention! Quit poking!"]
+    ],
+    "pickup": [
+      ["ts", "Eek!"],
+      ["", "Whoa whoa whoa! Put me down!"],
+      ["", "I can fly! ...Wait, no, I can't. That's Firamon!"],
+      ["", "H-hey! I'm not scared of heights! Totally not!"]
+    ],
+    "throw": [
+      ["", "Wheeeee—!"],
+      ["", "Not the face! Not the face!"],
+      ["", "Corona... spiiiin!"]
+    ],
+    "dizzy": [
+      ["", "Ugh... two Thors... three Thors..."],
+      ["", "I'm fine! I meant to do that. Totally."],
+      ["", "The room is spinning... or is that me?"]
+    ],
+    "land": [
+      ["", "Ta-da! Stuck the landing!"],
+      ["", "Ten out of ten. Lunamon would be so impressed."]
+    ],
+    "pet": [
+      ["ts", "Thanks. So you respect me, huh? I respect you back."],
+      ["", "Hehe... okay, you can keep doing that."],
+      ["", "My mane's extra warm today, right?"],
+      ["", "I'll guard your apps forever if you keep this up."]
+    ],
+    "idle": [
+      ["ts", "The sun is on my side, so my flames are unbeatable! Let's get out there and fight!"],
+      ["ts", "Nobody's got more guts than me!"],
+      ["ts", "Well, yeah, of course I can! I'm going to do big things. Just you watch!"],
+      ["", "One day I'll Digivolve into Firamon. Then Flaremon. Then... Apollomon!"],
+      ["", "Two screens, one Coronamon. That's twice the territory to protect!"],
+      ["", "I should bake something. Bread? Croissants? An APK?"],
+      ["", "I've counted every pixel on this screen. Twice."],
+      ["", "You know, the bottom screen is nice. Cozy. Good for naps."],
+      ["", "Is it just me, or does this screen get warmer when I stand on it?"],
+      ["", "If anything crashes, I'll be the first to know. Count on it!"],
+      ["", "Grok writes the code, I guard the Thor. Teamwork!"],
+      ["", "My tail flame says it's a good day."],
+      ["", "I'm not small. I'm fun-sized. There's a difference!"],
+      ["", "Hmm hm hmm... I wonder what Lunamon's up to."],
+      ["", "Corona Knuckle! ...Practice swing. Don't mind me."],
+      ["", "Need an app updated? Installed? Babysat? I'm your Digimon."]
+    ],
+    "quote": [
+      ["ts", "What is it...? I've never seen a Digimon like this before."],
+      ["ts", "This... is a human?"],
+      ["ts", "The precious egg of the Great Guardian..."],
+      ["ts", "What?! What part of Minnie is wimpy in any way?!"],
+      ["ts", "I'm no coward! And I'll prove it to you!"],
+      ["ts", "Th-That goes for me, too! I'll finish you all without breaking a sweat!"],
+      ["ts", "And I-I'm not scared at all, okay?! Let's gooooo!"],
+      ["ts", "Man, look at him go...! Well, I-I can fight too, you know!"],
+      ["ts", "Did you see me? Did you see what I can do? Hahaha!"],
+      ["ts", "Blimpmon is so cool. But they won't beat me!"],
+      ["ts", "Well, yeah, of course I can! I'm going to do big things. Just you watch!"],
+      ["ts", "Now I can go to the Cosmic Area! Training in a legendary spot'll get me in awesome shape!"],
+      ["ts", "Yeah! Me falling behind you guys was all just some kind of mistake!"],
+      ["ts", "A fabled place at the world's end, full of harsh environments and battle-scarred vets!"],
+      ["ts", "I-I am happy with who I am now! It's everyone else who can't see how great I am!"],
+      ["ts", "So I'm gonna train in the Cosmic Area and become a big shot in both rep and reality!"],
+      ["ts", "Those Titans'll think twice about messing with our town! Even if you aren't around!"],
+      ["ts", "Aw, man... If only I could get to the Cosmic Area."],
+      ["ts", "Then I could train super hard and get super strong. *sigh* I just can't let it go..."],
+      ["ts", "What's up? ...Wait. Blimpmon had a cooler installed?!"],
+      ["ts", "Naturally! It'll be fine. Now, let's go see Blimpmon!"],
+      ["ts", "You can wait here. It's only me that needs to train, right?"],
+      ["ts", "After all, only one can be the strongest! And then I'll protect everyone!"],
+      ["ts", "Wow, Locomon! It's so cool!"],
+      ["ts", "Hey, take me with you! I want to ride Locomon!"],
+      ["ts", "Lots of folks here look up to Merukimon, and lots of them want to be warriors, too!"],
+      ["ts", "That was a close scrape back there, but that makes me a warrior now too, right? Right?!"],
+      ["ts", "Okay! Now all I have to do is keep getting stronger and then I'll be just like Merukimon!"],
+      ["ts", "I'm so jealous of you. I want to visit all kinds of different places, too!"],
+      ["ts", "If it can take out even Nervy... then what in the world is that thing?!"],
+      ["ts", "Nobody's got more guts than me!"],
+      ["ts", "The sun is on my side, so my flames are unbeatable! Let's get out there and fight!"],
+      ["ts", "I know. It's always the guys with the least guts who say others don't have any."],
+      ["ts", "Huh? But I wanted to be friends... We're in this together, right?"],
+      ["ts", "Thanks. So you respect me, huh? I respect you back."]
+    ],
+    "night": [
+      ["", "*yawn* ...It's late. Even the sun goes to bed."],
+      ["", "Lunamon would love this time of night..."],
+      ["", "Night shift! I'll guard the Thor while you sleep. ...Zzz."]
+    ],
+    "sleepy": [
+      ["", "*yawn* ...Just resting my eyes. Warriors need recharging too."],
+      ["", "Five more minutes... the sun isn't even up..."],
+      ["", "Gonna... take a quick nap. Wake me if anything crashes."]
+    ],
+    "wake": [
+      ["ts", "...Huh?"],
+      ["ts", "Eek!"],
+      ["", "I wasn't sleeping! I was... meditating!"],
+      ["", "Whuh—! I'm up! I'm up! Who's attacking?!"]
+    ],
+    "train": [
+      ["ts", "Okay! Now all I have to do is keep getting stronger and then I'll be just like Merukimon!"],
+      ["ts", "After all, only one can be the strongest! And then I'll protect everyone!"],
+      ["", "Hup! Hup! A hundred more punches and then snack time!"],
+      ["", "One, two, three... I'll be Firamon in no time!"],
+      ["move", "Corona Knuckle!"]
+    ],
+    "special": [
+      ["move", "Corona Knuckle!"],
+      ["move", "Corona Flame!"],
+      ["move", "Petit Prominence!"]
+    ],
+    "bask": [
+      ["ts", "The sun is on my side, so my flames are unbeatable! Let's get out there and fight!"],
+      ["", "Ahh... sunlight. Recharging the flame."],
+      ["", "Nothing beats a good sunbath. Not even a good nap."]
+    ],
+    "dance": [
+      ["", "Dance break! Even warriors gotta groove!"],
+      ["", "Left foot, right foot, fire foot!"]
+    ],
+    "think": [
+      ["ts", "I'll win by showing I can work even harder than Blimpmon! You know, by, um..."],
+      ["", "Hmm... let me think..."],
+      ["", "Something's on my mind... was it bread? I think it was bread."]
+    ],
+    "build_start": [
+      ["", "Grok's cooking up {app}! I'll get the oven going!"],
+      ["", "A fresh build of {app}? Chef's hat: on!"],
+      ["", "Baking {app}... no peeking, it needs time to rise!"],
+      ["ts", "Just relax and wait here. I'll be back once I've Digivolved!"]
+    ],
+    "build_ok": [
+      ["", "{app} came out of the oven golden brown! Perfect bake!"],
+      ["", "Build done! Smells like a fresh APK!"],
+      ["ts", "Did you see me? Did you see what I can do? Hahaha!"]
+    ],
+    "build_fail": [
+      ["ts", "Yeah, our bad."],
+      ["ts", "I'm sorry..."],
+      ["", "Uh-oh... {app} got burnt. Grok's taking another look."],
+      ["", "The build fell flat. Like a soufflé. We'll try again!"]
+    ],
+    "install_start": [
+      ["", "Installing {app}! Stand back, this takes guts!"],
+      ["", "Here comes {app} {version}! Opening the hatch..."],
+      ["", "Package incoming! I've got it, I've got it!"]
+    ],
+    "install_ok": [
+      ["", "{app} {version} is in! Corona Knuckle of approval!"],
+      ["", "Installed! {app} is ready to roll!"],
+      ["ts", "Did you see me? Did you see what I can do? Hahaha!"],
+      ["ts", "Nobody's got more guts than me!"]
+    ],
+    "install_fail": [
+      ["ts", "What good am I if I can't even take on these goons!"],
+      ["ts", "I'm sorry..."],
+      ["", "{app} wouldn't go in... {msg}"],
+      ["", "The install fizzled. Don't worry, Grok and I will figure it out!"]
+    ],
+    "self_update": [
+      ["", "New me! Coronamon {version}, fired up and ready!"],
+      ["", "I feel... stronger. Was that a Digivolution? No? Just an update? Still cool!"]
+    ],
+    "update_found": [
+      ["", "Hey! {app} has a new version: {version}! Want me to grab it?"],
+      ["", "Psst, {app} {version} is out! I can fetch it for you!"]
+    ],
+    "update_notify": [
+      ["", "{app} {version} is out upstream! Ask Grok to whip up a new build."]
+    ],
+    "update_ok": [
+      ["", "{app} is up to date! Fresh as morning sunlight!"]
+    ],
+    "crash": [
+      ["ts", "No...!"],
+      ["", "{app} just crashed! I saved the report for Grok."],
+      ["", "Whoa, {app} went down! Don't worry, I caught the details."]
+    ],
+    "anr": [
+      ["", "{app} froze up! Like an ice Digimon got to it. Report saved."]
+    ],
+    "app_open": [
+      ["", "Ooh, {app}! Good pick!"],
+      ["", "{app}! One of ours. I keep it in top shape!"]
+    ],
+    "game_open": [
+      ["ts", "And I-I'm not scared at all, okay?! Let's gooooo!"],
+      ["", "Game time! I'll get out of your way."],
+      ["", "Ooh, {app}? I'll cheer from over here!"]
+    ],
+    "hop": [
+      ["", "Be right back! Gonna check the other screen."],
+      ["", "Hup! Screen hop!"],
+      ["ts", "I'm so jealous of you. I want to visit all kinds of different places, too!"]
+    ],
+    "new_app": [
+      ["ts", "What is it...? I've never seen a Digimon like this before."],
+      ["", "A new app! Welcome to the Thor, {app}!"]
+    ],
+    "shizuku_down": [
+      ["", "Shizuku's asleep... Pathfinder needs it. Plug me into the Mac and Grok can wake it up!"]
+    ],
+    "grok": [
+      ["", "Grok's here! Let's build something awesome!"]
+    ],
+    "den": [
+      ["", "Welcome to my den! Everything Grok made for your Thor is in here."]
+    ]
+  }
+}

@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+"""coro - Grok Build's side of Coronamon, the companion that manages software on the AYN Thor.
+
+Talks to the Coronamon app over adb (content://dev.grokbuild.coronamon.bridge).
+
+  coro status                          what he's doing, permissions, screens
+  coro install APK [--label L] [--project DIR] [--keep-installer]
+                                       install/update an app with Coronamon cheering it on
+  coro wrap LABEL [--pkg P] -- CMD...  run a build command while he bakes; reports success or failure
+  coro build-start LABEL | coro build-end LABEL ok|fail [--msg M]
+  coro register PKG [--label L] [--project DIR] [--github OWNER/REPO] [--update-mode ask|auto|notify|off]
+                    [--avoid yes|no] [--kind built|installed]
+  coro adopt PKG                       reinstall an installed app so Coronamon can update it silently
+  coro forget PKG | coro registry | coro history [N]
+  coro reports [PKG] | coro report PATH
+  coro check [PKG] | coro update PKG   GitHub release checks / device-side update
+  coro say TEXT | coro say --key KEY   make him talk
+  coro act MOVE [SECS] | coro moves    play an animation ("hop" switches screens)
+  coro hide [SECS] | coro show | coro summon top|bottom | coro den [top|bottom]
+  coro shot [top|bottom|both] [--hide] [--out DIR]
+  coro setting [KEY [VALUE]] | coro lines [reload] | coro shizuku [request]
+  coro setup                           grant permissions, start Shizuku, wake him
+  coro log [N]                         his logcat
+"""
+import base64
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+PKG = "dev.grokbuild.coronamon"
+URI = "content://%s.bridge" % PKG
+HOME = os.path.expanduser("~")
+ADB = os.environ.get("ADB", os.path.join(HOME, "platform-tools", "adb"))
+AAPT2 = os.path.join(HOME, "thor-naruto", "tools", "android-37.0", "aapt2")
+SERIAL = os.environ.get("ANDROID_SERIAL", "62dff1b0")
+
+
+class CoroError(Exception):
+    pass
+
+
+def adb(*args, check=True, capture=True, timeout=300):
+    cmd = [ADB, "-s", SERIAL] + list(args)
+    r = subprocess.run(cmd, capture_output=capture, text=True, timeout=timeout)
+    if check and r.returncode != 0:
+        raise CoroError("adb %s failed: %s" % (" ".join(args[:2]), (r.stderr or r.stdout).strip()))
+    return r
+
+
+def sh(command, check=False, timeout=300):
+    r = adb("shell", command, check=False, timeout=timeout)
+    out = "\n".join(l for l in (r.stdout or "").splitlines() if not l.startswith("avc:"))
+    if check and r.returncode != 0:
+        raise CoroError("%s: %s" % (command.split()[0], (out + (r.stderr or "")).strip()))
+    return out
+
+
+def b64(s):
+    return base64.b64encode(str(s).encode()).decode()
+
+
+def bridge(method, arg=None, retries=8, **extras):
+    parts = ["content", "call", "--uri", URI, "--method", method, "--extra", "enc:s:b64"]
+    if arg is not None and arg != "":
+        parts += ["--arg", b64(arg)]
+    for k, v in extras.items():
+        if v is None:
+            continue
+        if isinstance(v, (dict, list)):
+            v = json.dumps(v)
+        elif isinstance(v, bool):
+            v = "true" if v else "false"
+        parts += ["--extra", "%s:s:%s" % (k, b64(v))]
+    command = " ".join(shlex.quote(p) for p in parts)
+    last = None
+    for attempt in range(retries):
+        out = sh(command)
+        i, j = out.find("json="), out.rfind("}]")
+        if i < 0 or j < 0:
+            last = out.strip() or "no reply"
+        else:
+            res = json.loads(out[i + 5:j])
+            if res.get("ok") or "waking up" not in str(res.get("error", "")):
+                return res
+            last = res.get("error")
+        time.sleep(0.8)
+    raise CoroError("Coronamon didn't answer: %s" % last)
+
+
+def need(res):
+    if not res.get("ok"):
+        raise CoroError(res.get("error", "failed"))
+    return res
+
+
+def badging(apk):
+    r = subprocess.run([AAPT2, "dump", "badging", apk], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise CoroError("aapt2 can't read %s: %s" % (apk, r.stderr.strip()))
+    t = r.stdout
+    m = re.search(r"package: name='([^']+)' versionCode='([^']*)' versionName='([^']*)'", t)
+    if not m:
+        raise CoroError("no package line in %s" % apk)
+    label = re.search(r"application-label:'([^']*)'", t)
+    return {"pkg": m.group(1), "code": m.group(2), "version": m.group(3), "label": label.group(1) if label else m.group(1)}
+
+
+def guess_project(apk):
+    """~/<dir> when the APK was built inside a project folder in the home directory."""
+    p = os.path.realpath(apk)
+    if not p.startswith(HOME + "/"):
+        return None
+    top = p[len(HOME) + 1:].split("/")[0]
+    d = os.path.join(HOME, top)
+    markers = ("build.sh", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", ".git")
+    if d != os.path.dirname(p) and any(os.path.exists(os.path.join(d, m)) for m in markers):
+        return "~/" + top
+    return None
+
+
+def opt(args, name, default=None):
+    if name in args:
+        i = args.index(name)
+        if i + 1 >= len(args):
+            raise CoroError("%s needs a value" % name)
+        v = args[i + 1]
+        del args[i:i + 2]
+        return v
+    return default
+
+
+def flag(args, name):
+    if name in args:
+        args.remove(name)
+        return True
+    return False
+
+
+# ---- commands ----
+
+def cmd_status(args):
+    s = need(bridge("status"))
+    if flag(args, "--json"):
+        print(json.dumps(s, indent=2))
+        return
+    where = "hidden" if not s["visible"] else ("hidden for %ds" % (s["hiddenFor"] / 1000) if s["hiddenFor"] else "on the %s screen" % s["screen"])
+    print("Coronamon %s: %s, doing '%s'%s%s" % (s["version"], where, s["move"], ", ghosting (a game or video is on screen)" if s["ghost"] else "",
+                                             ", working on %s %s" % (s["job"], s["jobApp"]) if s.get("job") else ""))
+    if s.get("speaking"):
+        print("  saying: %s" % s["speaking"])
+    for st in s["stages"]:
+        print("  %-6s %4dx%-4d %s  top app: %s%s" % (st["name"], st["w"], st["h"], "on " if st["on"] else "off", st.get("top"),
+                                                   " (he avoids it)" if st.get("avoid") else ""))
+    missing = [k for k, v in s["permissions"].items() if not v]
+    print("  permissions: %s" % ("all granted" if not missing else "missing " + ", ".join(missing) + " (run coro setup)"))
+    print("  shizuku: %s   app watching: %s" % (s["shizuku"], "working" if s["foregroundWorking"] else "off"))
+
+
+def install_flow(apk, label=None, project=None, keep_installer=False, quiet=False):
+    if not os.path.isfile(apk):
+        raise CoroError("no such APK: %s" % apk)
+    info = badging(apk)
+    pkg, version = info["pkg"], info["version"]
+    label = label or info["label"]
+    project = project or guess_project(apk)
+    self_update = pkg == PKG
+    if not self_update:
+        need(bridge("job", "begin", kind="install", label=label, pkg=pkg, version=version, detail=apk))
+    else:
+        try:
+            bridge("job", "begin", retries=2, kind="install", label="Coronamon", pkg=pkg, version=version, detail=apk)
+        except CoroError:
+            pass
+    tmp = "/data/local/tmp/coro-%s.apk" % pkg
+    adb("push", apk, tmp)
+    installer = "" if keep_installer else "-i %s " % PKG
+    out = sh("pm install -r %s%s 2>&1" % (installer, tmp), timeout=600).strip()
+    ok = "Success" in out
+    msg = "Installed" if ok else (out.splitlines()[-1] if out else "pm install failed")
+    if ok:
+        dest = "/sdcard/Coronamon/apks/%s" % pkg
+        safe_v = re.sub(r"[^\w.-]", "_", version or info["code"])
+        sh("mkdir -p %s && cp %s %s/%s.apk && cd %s && ls -t *.apk | tail -n +4 | while read f; do rm -f \"$f\"; done"
+           % (dest, tmp, dest, safe_v, dest))
+    sh("rm -f %s" % tmp)
+    fields = {"label": label, "kind": "built" if project else "installed"}
+    if project:
+        fields["project"] = project
+    if self_update:
+        if ok:
+            time.sleep(1.5)
+            bridge("register", pkg, retries=15, fields=fields)
+    else:
+        need(bridge("job", "end", kind="install", label=label, pkg=pkg, version=version, ok=ok, msg=msg, fields=fields))
+    if not quiet:
+        print("%s %s %s: %s" % ("Installed" if ok else "FAILED", label, version, msg if not ok else pkg))
+    if not ok:
+        raise CoroError(msg)
+    return info
+
+
+def cmd_install(args):
+    label = opt(args, "--label")
+    project = opt(args, "--project")
+    keep = flag(args, "--keep-installer")
+    if not args:
+        raise CoroError("usage: coro install APK [--label L] [--project DIR]")
+    install_flow(args[0], label, project, keep)
+
+
+def cmd_wrap(args):
+    if "--" not in args:
+        raise CoroError("usage: coro wrap LABEL [--pkg P] -- CMD...")
+    i = args.index("--")
+    head, cmd = args[:i], args[i + 1:]
+    pkg = opt(head, "--pkg")
+    label = head[0] if head else os.path.basename(os.getcwd())
+    try:
+        bridge("job", "begin", retries=3, kind="build", label=label, pkg=pkg, detail=" ".join(cmd))
+    except CoroError as e:
+        print("coro: (Coronamon not reachable: %s)" % e, file=sys.stderr)
+    tail = []
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in p.stdout:
+        sys.stdout.write(line)
+        tail.append(line.rstrip())
+        tail = tail[-40:]
+    code = p.wait()
+    ok = code == 0
+    msg = None
+    if not ok:
+        errs = [l for l in tail if re.search(r"error|exception|failed|FAILED", l)]
+        msg = (errs[0] if errs else (tail[-1] if tail else "exit %d" % code)).strip()[:300]
+    try:
+        bridge("job", "end", retries=3, kind="build", label=label, pkg=pkg, ok=ok, msg=msg)
+    except CoroError:
+        pass
+    sys.exit(code)
+
+
+def cmd_build_start(args):
+    pkg = opt(args, "--pkg")
+    need(bridge("job", "begin", kind="build", label=args[0] if args else "a build", pkg=pkg))
+
+
+def cmd_build_end(args):
+    pkg = opt(args, "--pkg")
+    msg = opt(args, "--msg")
+    if len(args) < 2 or args[1] not in ("ok", "fail"):
+        raise CoroError("usage: coro build-end LABEL ok|fail [--msg M]")
+    need(bridge("job", "end", kind="build", label=args[0], pkg=pkg, ok=args[1] == "ok", msg=msg))
+
+
+def cmd_register(args):
+    fields = {}
+    for k in ("label", "project", "github", "update-mode", "kind", "avoid", "asset-regex"):
+        v = opt(args, "--" + k)
+        if v is not None:
+            key = {"update-mode": "updateMode", "asset-regex": "assetRegex"}.get(k, k)
+            fields[key] = (v in ("yes", "true", "1")) if k == "avoid" else v
+    if not args:
+        raise CoroError("usage: coro register PKG [--label L] ...")
+    r = need(bridge("register", args[0], fields=fields))
+    print(("Registered " if r.get("new") else "Updated ") + json.dumps(r["entry"], indent=2))
+
+
+def cmd_adopt(args):
+    if not args:
+        raise CoroError("usage: coro adopt PKG")
+    pkg = args[0]
+    paths = [l[8:] for l in sh("pm path %s" % pkg).splitlines() if l.startswith("package:")]
+    if not paths:
+        raise CoroError("%s isn't installed" % pkg)
+    if len(paths) > 1:
+        raise CoroError("%s is a split APK; adopt only handles single APKs" % pkg)
+    tmp = "/data/local/tmp/coro-adopt-%s.apk" % pkg
+    sh("cp %s %s" % (shlex.quote(paths[0]), tmp), check=True)
+    out = sh("pm install -r -i %s %s 2>&1; rm -f %s" % (PKG, tmp, tmp)).strip()
+    if "Success" not in out:
+        raise CoroError(out)
+    bridge("register", pkg)
+    print("Coronamon is now the installer of record for %s (data kept)." % pkg)
+
+
+def cmd_forget(args):
+    need(bridge("forget", args[0]))
+
+
+def cmd_registry(args):
+    r = need(bridge("registry"))
+    if flag(args, "--json"):
+        print(json.dumps(r["apps"], indent=2))
+        return
+    for a in sorted(r["apps"], key=lambda a: a.get("label", "")):
+        up = a.get("update") or {}
+        print("%-26s %-38s %-22s %-10s %s" % (a.get("label", "")[:26], a["pkg"], (a.get("versionName") or "not installed")[:22],
+                                              "coronamon" if a.get("installer") == PKG else (a.get("installer") or "-")[:10],
+                                              ("update " + up["version"]) if up.get("version") else ""))
+
+
+def cmd_history(args):
+    n = int(args[0]) if args else 25
+    for e in need(bridge("history", str(n)))["events"]:
+        t = time.strftime("%m-%d %H:%M", time.localtime(e["t"] / 1000))
+        ok = {True: "ok", False: "FAIL"}.get(e.get("ok"), "")
+        print("%s  %-14s %-4s %s %s  %s" % (t, e["kind"], ok, e.get("app") or "", e.get("version") or "", (e.get("msg") or "")[:120]))
+
+
+def cmd_reports(args):
+    r = need(bridge("reports", args[0] if args else None, n="20"))
+    for x in r["reports"]:
+        t = time.strftime("%m-%d %H:%M", time.localtime(x["time"] / 1000))
+        print("%s  %-6s %-34s %s\n      %s" % (t, x["kind"], x["pkg"], x["headline"], x["path"]))
+    if not r["reports"]:
+        print("No crash reports.")
+
+
+def cmd_report(args):
+    print(sh("cat %s" % shlex.quote(args[0])))
+
+
+def cmd_check(args):
+    need(bridge("check", args[0] if args else ""))
+    print("Checking; results show up on the Thor and in `coro registry`.")
+
+
+def cmd_update(args):
+    need(bridge("update", args[0]))
+
+
+def cmd_say(args):
+    key = opt(args, "--key")
+    r = need(bridge("say", " ".join(args) if args else None, key=key))
+    print(r.get("said", ""))
+
+
+def cmd_act(args):
+    if not args:
+        raise CoroError("usage: coro act MOVE [SECS]")
+    need(bridge("act", args[0], secs=args[1] if len(args) > 1 else None))
+
+
+def cmd_moves(args):
+    print(" ".join(need(bridge("moves"))["moves"]))
+
+
+def cmd_hide(args):
+    need(bridge("hide", args[0] if args else "0"))
+
+
+def cmd_show(args):
+    need(bridge("show"))
+
+
+def cmd_summon(args):
+    need(bridge("summon", args[0] if args else "top"))
+
+
+def cmd_den(args):
+    need(bridge("den", args[0] if args else ""))
+
+
+def cmd_setting(args):
+    if len(args) >= 2:
+        r = need(bridge("setting", args[0], value=args[1]))
+    else:
+        r = need(bridge("setting"))
+    r.pop("ok", None)
+    print(json.dumps(r, indent=2))
+
+
+def cmd_lines(args):
+    r = need(bridge("lines", args[0] if args else None))
+    print(json.dumps(r["lines"]["lines"], indent=1, ensure_ascii=False))
+
+
+def cmd_shizuku(args):
+    r = need(bridge("shizuku", args[0] if args else None))
+    print("Shizuku: %s%s" % (r["state"], " (a prompt is showing on the Thor; tap Allow)" if args and r["state"] == "running" else ""))
+
+
+def displays():
+    out = sh("dumpsys SurfaceFlinger --display-id")
+    ids = sorted((int(h), d) for d, h in re.findall(r"Display (\d+) \(HWC display (\d+)\)", out))
+    if len(ids) < 2:
+        return {"top": "4630946441858561667", "bottom": "4630946482288158084"}
+    return {"top": ids[0][1], "bottom": ids[1][1]}
+
+
+def cmd_shot(args):
+    hide = flag(args, "--hide")
+    outdir = opt(args, "--out", "/tmp")
+    os.makedirs(outdir, exist_ok=True)
+    which = args[0] if args else "both"
+    names = ["top", "bottom"] if which == "both" else [which]
+    if "Awake" not in sh("dumpsys power | grep mWakefulness="):
+        sh("input keyevent KEYCODE_WAKEUP")
+        time.sleep(0.6)
+    ids = displays()
+    if hide:
+        bridge("hide", "6")
+        time.sleep(0.35)
+    stamp = time.strftime("%H%M%S")
+    for n in names:
+        path = os.path.join(outdir, "thor-%s-%s.png" % (n, stamp))
+        with open(path, "wb") as f:
+            subprocess.run([ADB, "-s", SERIAL, "exec-out", "screencap", "-p", "-d", ids[n]], stdout=f, check=True)
+        print(path)
+    if hide:
+        bridge("show")
+
+
+def cmd_setup(args):
+    grants = ["appops set %s SYSTEM_ALERT_WINDOW allow" % PKG, "appops set %s MANAGE_EXTERNAL_STORAGE allow" % PKG,
+              "appops set %s GET_USAGE_STATS allow" % PKG, "appops set %s REQUEST_INSTALL_PACKAGES allow" % PKG,
+              "pm grant %s android.permission.READ_LOGS" % PKG, "pm grant %s android.permission.DUMP" % PKG,
+              "pm grant %s android.permission.POST_NOTIFICATIONS" % PKG, "dumpsys deviceidle whitelist +%s >/dev/null" % PKG]
+    print(sh("; ".join(grants)).strip() or "permissions granted")
+    shz = [l[8:] for l in sh("pm path moe.shizuku.privileged.api").splitlines() if l.startswith("package:")]
+    if shz:
+        running = "shizuku_server" in sh("ps -A -o NAME | grep -i shizuku")
+        if not running:
+            lib = os.path.dirname(shz[0]) + "/lib/arm64/libshizuku.so"
+            print(sh("%s 2>&1 | tail -n 2" % lib, timeout=60).strip())
+        else:
+            print("Shizuku already running")
+    bridge("ping")
+    time.sleep(1)
+    cmd_status([])
+
+
+def cmd_log(args):
+    n = args[0] if args else "80"
+    pid = sh("pidof %s" % PKG).strip()
+    if not pid:
+        print("Coronamon isn't running.")
+        return
+    out = adb("logcat", "-d", "--pid=" + pid, check=False).stdout
+    lines = [l for l in out.splitlines() if "Choreographer" not in l]
+    print("\n".join(lines[-int(n):]))
+
+
+COMMANDS = {
+    "status": cmd_status, "install": cmd_install, "wrap": cmd_wrap, "build-start": cmd_build_start, "build-end": cmd_build_end,
+    "register": cmd_register, "adopt": cmd_adopt, "forget": cmd_forget, "registry": cmd_registry, "history": cmd_history,
+    "reports": cmd_reports, "report": cmd_report, "check": cmd_check, "update": cmd_update, "say": cmd_say, "act": cmd_act,
+    "moves": cmd_moves, "hide": cmd_hide, "show": cmd_show, "summon": cmd_summon, "den": cmd_den, "shot": cmd_shot,
+    "setting": cmd_setting, "lines": cmd_lines, "shizuku": cmd_shizuku, "setup": cmd_setup, "log": cmd_log,
+}
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return
+    fn = COMMANDS.get(args[0])
+    if not fn:
+        print("coro: unknown command %s (try coro help)" % args[0], file=sys.stderr)
+        sys.exit(2)
+    try:
+        fn(args[1:])
+    except CoroError as e:
+        print("coro: %s" % e, file=sys.stderr)
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("coro: adb timed out", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

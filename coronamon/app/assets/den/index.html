@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Coronamon's Den</title>
+<link rel="stylesheet" href="den.css">
+</head>
+<body>
+<nav id="rail">
+  <div id="me"><img id="avatar" alt=""></div>
+  <button class="tab" data-tab="apps">Apps</button>
+  <button class="tab" data-tab="activity">Activity</button>
+  <button class="tab" data-tab="crashes">Crashes</button>
+  <button class="tab" data-tab="inbox">Inbox</button>
+  <button class="tab" data-tab="settings">Settings</button>
+  <button class="tab" data-tab="about">About</button>
+</nav>
+<main>
+  <header>
+    <h1 id="title">Apps</h1>
+    <p id="quip"></p>
+  </header>
+  <section id="view"></section>
+</main>
+<div id="modal" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="modal-title"></h2><button id="modal-close">Close</button></div>
+    <pre id="modal-body"></pre>
+  </div>
+</div>
+<div id="toast" hidden></div>
+<script src="den.js"></script>
+</body>
+</html>
