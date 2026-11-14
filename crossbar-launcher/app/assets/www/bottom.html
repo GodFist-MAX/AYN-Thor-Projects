@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1240, user-scalable=no">
+<title>CrossBar Bottom Screen</title>
+<link rel="preload" href="fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/bottom.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="gw" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d7e0ef"/>
+    </linearGradient>
+  </defs>
+</svg>
+<div id="stage">
+  <div class="layer" id="bg-base"></div>
+  <div class="layer" id="bg-glow"></div>
+  <div class="layer bgimg" id="bg-a"></div>
+  <div class="layer bgimg" id="bg-b"></div>
+  <div class="layer" id="bg-shade"></div>
+  <header id="tabs"><div class="tabs"></div><div class="status"></div></header>
+  <main id="main"></main>
+  <section id="sheet"></section>
+  <section id="away"></section>
+  <footer id="dock"></footer>
+  <div id="toast"></div>
+  <div id="boot"><div class="bl">CROSSBAR</div></div>
+</div>
+<script src="js/core.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/bottom.js"></script>
+</body>
+</html>

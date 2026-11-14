@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, user-scalable=no">
+<title>CrossBar</title>
+<link rel="preload" href="fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="gw" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d7e0ef"/>
+    </linearGradient>
+  </defs>
+</svg>
+<div id="stage">
+  <div class="layer" id="bg-base"></div>
+  <div class="layer"><div class="wall" id="wall-a"></div><div class="wall" id="wall-b"></div></div>
+  <div class="layer"><div class="hero" id="hero-a"></div><div class="hero" id="hero-b"></div></div>
+  <div class="layer" id="hero-shade"></div>
+  <canvas id="wave"></canvas>
+  <div class="layer" id="vignette"></div>
+  <div class="layer" id="detail-shade"></div>
+
+  <div id="xmb"><div id="bar"></div></div>
+  <div id="crumbs"></div>
+  <div id="status">
+    <div class="st hide" id="st-np"><span class="sti"></span><span id="np-mini"></span></div>
+    <div class="st hide" id="st-friends"><span class="sti"></span><span class="n"></span></div>
+    <div class="st hide" id="st-notif"><span class="sti"></span><span class="n"></span></div>
+    <div class="st" id="st-wifi"></div>
+    <div class="st" id="st-bat"></div>
+    <div id="clock"></div>
+    <div id="avatar">P</div>
+  </div>
+  <div id="detail"></div>
+  <div id="hints"></div>
+
+  <div class="ov" id="music-ov"></div>
+  <div class="ov" id="video-ov"></div>
+  <div class="ov" id="photo-ov"></div>
+  <div id="opts"><h3></h3><div class="list"></div></div>
+  <div id="dialog"><div class="box"></div></div>
+  <div id="toast"></div>
+  <div id="boot"><div class="bl">CROSSBAR</div><div class="bs">LAUNCHER</div></div>
+</div>
+<script src="js/core.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/wave.js"></script>
+<script src="js/bg.js"></script>
+<script src="js/model.js"></script>
+<script src="js/panels.js"></script>
+<script src="js/media.js"></script>
+<script src="js/xmb.js"></script>
+<script src="js/companion.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
