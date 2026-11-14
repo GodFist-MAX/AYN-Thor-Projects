@@ -488,6 +488,40 @@ const Sheets = {
   },
 };
 
+/* Now Playing for a video app's session. This screen's own, not a mirror of the top's overlays, so it also works while a game covers the top. */
+function npvHtml(src) {
+  const icon = esc(`/img/app?pkg=${encodeURIComponent(src.pkg)}`);
+  const c = cmd => `data-act="npv:${cmd}"`;
+  return `<div class="sh-card npv">
+    <div class="kicker"><img class="appi" src="${icon}" alt="" onerror="this.remove()"><span>Now Playing · ${esc(src.app)}</span></div>
+    <div class="npvbody">
+      <div class="screen" ${c('watch')}>
+        <div class="sbg"></div><img class="sart" alt="">
+        <div class="sglyph">${miniGlyph('video')}</div>
+        <div class="splay">${miniGlyph('play')}</div><div class="spin"></div>
+        <div class="sstate"></div>
+      </div>
+      <div class="ninfo">
+        <div class="t"></div><div class="m"></div><div class="st"></div>
+        <div class="prog"><i></i></div><div class="times"><span class="tp"></span><span class="td"></span></div>
+      </div>
+    </div>
+    <div class="mctl">
+      <div class="cb c-prev" ${c('prev')}>${miniGlyph('prev')}</div>
+      <div class="cb c-seek" ${c('back10')}><span class="sk">−10</span></div>
+      <div class="cb big c-play" ${c('toggle')}>${miniGlyph('play')}</div>
+      <div class="cb c-seek" ${c('fwd10')}><span class="sk">+10</span></div>
+      <div class="cb c-next" ${c('next')}>${miniGlyph('next')}</div>
+    </div>
+    <div class="npvfoot">
+      <div class="note"></div>
+      <div class="btn xl primary b-watch" ${c('watch')}>${miniGlyph('play')}<span>Watch Here</span></div>
+      <div class="btn xl b-open" ${c('open')}><img class="bi" src="${icon}" alt="" onerror="this.remove()"><span>Open ${esc(src.app)}</span></div>
+    </div>
+    <div class="sh-close" ${c('close')}>✕</div>
+  </div>`;
+}
+
 // ---------- the screen ----------
 const Bottom = window.Bottom = {
   vm: null,
@@ -509,6 +543,7 @@ const Bottom = window.Bottom = {
     this.main = $('#main');
     this.sheet = $('#sheet');
     this.away = $('#away');
+    this.npvEl = $('#npv');
     this.dock = $('#dock');
     this.initTouch();
     this.topVisible = !!NB.topVisible();
@@ -550,6 +585,7 @@ const Bottom = window.Bottom = {
 
   onHome() {
     this.poke();
+    this.closeVideo();
     const sc = this.main.querySelector('.page:not(.out) .scroll');
     if (sc) sc.scrollTop = 0;
   },
@@ -578,6 +614,7 @@ const Bottom = window.Bottom = {
       this.renderSheet();
       this.renderMain();
     }
+    if (this.npv) this.npvRender();
     this.renderBg();
     this.stage.classList.toggle('away', !this.topVisible);
   },
@@ -742,7 +779,7 @@ const Bottom = window.Bottom = {
     const type = ov && Sheets[ov.type] ? ov.type : '';
     if (!this.changed('sheet', ov)) return;
     this.sheet.classList.toggle('on', !!type);
-    this.main.classList.toggle('under', !!type);
+    this.main.classList.toggle('under', !!type || !!this.npv);
     clearInterval(this.sheetTimer);
     if (!type) return;
     const sameType = this.sheetType === type && type === 'music';
@@ -823,9 +860,10 @@ const Bottom = window.Bottom = {
     return this.songList;
   },
 
-  /* What was just started on the top screen, if the top screen was covered because of it. */
+  /* What was just started on the top screen (by the menu, or by Open on Now Playing here), if the top screen was covered because of it. */
   launch() {
-    const l = this.vm && this.vm.launch;
+    const a = this.vm && this.vm.launch, b = this.ownLaunch;
+    const l = a && b ? (a.at > b.at ? a : b) : a || b;
     if (!l) return null;
     return Math.abs((this.awaySince || Date.now()) - l.at) < 20000 ? l : null;
   },
@@ -900,7 +938,7 @@ const Bottom = window.Bottom = {
     const online = Math.max(s.friends || 0, friends.length);
     this.dock.innerHTML = `
       <div class="dk music" data-act="music:open">
-        <div class="art">${src ? `<img src="/img/np?k=${encodeURIComponent(artKey)}" alt="" data-fb="music" onerror="imgFail(this)">` : miniGlyph('music')}</div>
+        <div class="art">${src ? `<img src="/img/np?k=${encodeURIComponent(artKey)}" alt="" data-fb="${src.video ? 'video' : 'music'}" onerror="imgFail(this)">` : miniGlyph('music')}</div>
         <div class="txt"><b>${esc(src ? src.title : 'Music')}</b><span>${esc(src ? (src.artist || src.app || '') : 'Nothing playing')}</span></div>
         <div class="ctl"><i class="pp" data-act="music:toggle">${miniGlyph(src && src.playing ? 'pause' : 'play')}</i><i data-act="music:next">${miniGlyph('next')}</i></div>
       </div>
@@ -915,6 +953,7 @@ const Bottom = window.Bottom = {
   musicCmd(cmd) {
     const src = npSource(this.status && this.status.np);
     if (cmd === 'open') {
+      if (src && src.src === 'external' && src.video) return this.openVideo(src);
       if (this.topVisible) send({ t: 'music', cmd: 'open' });
       return;
     }
@@ -931,9 +970,185 @@ const Bottom = window.Bottom = {
     if (this.sheetType === 'music' && this.sheet.classList.contains('on')) setTimeout(() => this.musicSheet(), 350);
   },
 
+  /*
+   * Tapping Now Playing for a video app. With the menu on the top screen, the video comes up on this
+   * screen straight away (the app moves here and keeps playing). Over a game or app the sheet asks
+   * first, since the app takes the controller; it's also the way to open the app instead, or the only
+   * option when the app has nothing it can show here.
+   */
+  openVideo(src) {
+    this.closeVideo();
+    this.npv = { pkg: src.pkg, src, at: Date.now(), busy: false, note: '', gone: 0, art: null, artUrl: '' };
+    this.keys.npvst = this.keys.npvplay = '';
+    this.npvEl.innerHTML = npvHtml(src);
+    this.npvEl.classList.add('on');
+    this.stage.classList.add('npv');
+    this.main.classList.add('under');
+    this.npvRender();
+    this.npvPollT = setInterval(() => this.npvPoll(), 1000);
+    this.npvTickT = setInterval(() => this.npvTick(), 500);
+    if (this.topVisible && src.canShow) this.watchHere();
+  },
+
+  closeVideo() {
+    const v = this.npv;
+    if (!v) return;
+    clearInterval(this.npvPollT);
+    clearInterval(this.npvTickT);
+    clearTimeout(v.busyT);
+    if (v.artUrl) URL.revokeObjectURL(v.artUrl);
+    this.npv = null;
+    this.npvEl.classList.remove('on');
+    this.stage.classList.remove('npv');
+    this.main.classList.toggle('under', this.sheet.classList.contains('on') || !this.topVisible);
+  },
+
+  watchHere() {
+    const v = this.npv;
+    if (!v || v.busy || !v.src.canShow || v.gone >= 3) return;
+    const err = NB.watchHere(v.pkg);
+    if (err) {
+      v.note = err;
+      this.toast(err);
+    } else {
+      v.note = '';
+      v.busy = true;
+      clearTimeout(v.busyT);
+      v.busyT = setTimeout(() => { v.busy = false; if (this.npv === v) this.npvRender(); }, 4000);
+    }
+    this.npvRender();
+  },
+
+  openApp() {
+    const v = this.npv;
+    if (!v) return;
+    const err = NB.openOnTop(v.pkg);
+    if (err) return this.toast(err);
+    this.ownLaunch = { title: v.src.app, sub: v.src.title, img: `/img/app?pkg=${encodeURIComponent(v.pkg)}`, appIcon: true, glyph: 'video', app: v.pkg, at: Date.now() };
+    this.closeVideo();
+  },
+
+  npvAct(cmd) {
+    const v = this.npv;
+    if (!v) return;
+    if (cmd === 'watch') return this.watchHere();
+    if (cmd === 'open') return this.openApp();
+    if (cmd === 'close') return this.closeVideo();
+    if (v.gone >= 3) return;
+    NB.mediaControl(v.pkg, cmd);
+    if (cmd === 'toggle') {
+      v.wantPlay = v.src.playing ? 0 : Date.now();
+      v.src = Object.assign({}, v.src, { playing: !v.src.playing, position: this.npvPos() });
+      v.at = Date.now();
+      this.npvRender();
+    }
+    setTimeout(() => this.npvPoll(), 350);
+  },
+
+  async npvPoll() {
+    const v = this.npv;
+    if (!v || document.hidden) return;
+    let np;
+    try { np = await Api.get('/api/nowplaying?pkg=' + encodeURIComponent(v.pkg)); } catch (e) { return; }
+    if (this.npv !== v) return;
+    const x = np.external || {};
+    if (x.active) {
+      const d = npSource((this.status || {}).np);
+      if (d && d.src === 'external' && d.pkg === v.pkg && d.playing !== x.playing) this.pollStatus();
+      if (x.playing) v.wantPlay = 0;
+      else if (v.wantPlay && Date.now() - v.wantPlay > 2500) {
+        // Some players (web ones especially) won't start while their app is out of sight.
+        v.wantPlay = 0;
+        this.toast(`${x.app} only plays on a screen. ${x.canShow ? 'Tap Watch Here to watch it.' : `Open ${x.app} to play it.`}`);
+      }
+      v.src = x;
+      v.gone = 0;
+    } else {
+      v.gone++;
+    }
+    v.at = Date.now();
+    this.npvRender();
+  },
+
+  npvPos() {
+    const v = this.npv, s = v.src;
+    const pos = s.position + (s.playing && v.gone < 3 ? (Date.now() - v.at) * (s.speed || 1) : 0);
+    return s.duration ? Math.min(s.duration, pos) : pos;
+  },
+
+  npvTick() {
+    const v = this.npv, e = this.npvEl;
+    if (!v) return;
+    const s = v.src, pos = this.npvPos();
+    $('.prog i', e).style.transform = `scaleX(${s.duration ? (pos / s.duration).toFixed(4) : 0})`;
+    setText($('.tp', e), Fmt.dur(pos));
+    setText($('.td', e), s.duration ? Fmt.dur(s.duration) : '');
+  },
+
+  npvRender() {
+    const v = this.npv, e = this.npvEl;
+    if (!v) return;
+    const s = v.src, gone = v.gone >= 3;
+    const l = this.launch();
+    const onTop = !this.topVisible && !!l && l.app === v.pkg;
+    const canShow = s.canShow && !gone;
+    setText($('.t', e), s.title || s.app);
+    setText($('.m', e), s.artist || '');
+    const st = gone ? 'Not playing anymore'
+      : `${s.playing ? 'Playing' : 'Paused'} ${onTop ? 'on the top screen' : 'in the background'}`;
+    const stHtml = `<i class="dot ${s.playing && !gone ? 'on' : 'off'}"></i><span>${esc(st)}</span>`;
+    if (this.changed('npvst', stHtml)) $('.st', e).innerHTML = stHtml;
+    const pp = s.playing && !gone ? 'pause' : 'play';
+    if (this.changed('npvplay', pp)) $('.c-play', e).innerHTML = miniGlyph(pp);
+    for (const b of e.querySelectorAll('.mctl .cb')) b.classList.toggle('off', gone);
+    $('.c-prev', e).classList.toggle('gone', !s.canPrev);
+    $('.c-next', e).classList.toggle('gone', !s.canNext);
+    for (const b of e.querySelectorAll('.c-seek')) b.classList.toggle('gone', !s.canSeek);
+    const scr = $('.screen', e);
+    scr.classList.toggle('no', !canShow);
+    scr.classList.toggle('busy', v.busy);
+    setText($('.sstate', e), v.busy ? 'Opening on this screen…' : canShow ? 'Watch on this screen' : `${s.app} can't show its video here`);
+    $('.b-watch', e).classList.toggle('gone', !canShow);
+    $('.b-open', e).classList.toggle('gone', onTop);
+    setText($('.note', e), v.note
+      || (!canShow ? `${s.app} can't show its video on this screen. You can still watch it in the app.`
+        : onTop ? 'Watch Here moves it down from the top screen.'
+          : this.topVisible ? 'The menu on the top screen keeps the controller.'
+            : 'The video takes the controller. Touch the top screen to give it back.'));
+    this.npvArt();
+    this.npvTick();
+  },
+
+  /* The session's picture, letterboxed over a blurred copy of itself (thumbnails are wide, anime covers tall). */
+  npvArt() {
+    const v = this.npv, s = v.src;
+    const key = v.pkg + '|' + s.title;
+    if (v.art === key) return;
+    v.art = key;
+    const scr = $('.screen', this.npvEl);
+    const live = () => this.npv === v && v.art === key;
+    fetch(`/img/np?pkg=${encodeURIComponent(v.pkg)}&k=${encodeURIComponent(s.title || '')}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.blob() : Promise.reject(new Error('HTTP ' + r.status))))
+      .then(b => {
+        if (!live()) return;
+        if (v.artUrl) URL.revokeObjectURL(v.artUrl);
+        v.artUrl = URL.createObjectURL(b);
+        $('.sart', scr).src = v.artUrl;
+        scr.classList.add('art');
+        return Blur.get(v.artUrl, { w: 160, blur: 3.5, filter: 'saturate(1.3) brightness(.55)' })
+          .then(u => { if (live()) $('.sbg', scr).style.backgroundImage = cssUrl(u); });
+      })
+      .catch(() => {
+        if (!live()) return;
+        scr.classList.remove('art');
+        $('.sbg', scr).style.backgroundImage = '';
+      });
+  },
+
   act(a) {
     const [k, v] = a.split(':');
     if (k === 'music') return this.musicCmd(v);
+    if (k === 'npv') return this.npvAct(v);
     if (k === 'showTop') return NB.showTop();
     return null;
   },

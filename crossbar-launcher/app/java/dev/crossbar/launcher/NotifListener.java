@@ -2,6 +2,7 @@ package dev.crossbar.launcher;
 
 import android.app.Notification;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -11,6 +12,7 @@ import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import android.util.Log;
@@ -212,8 +214,16 @@ public class NotifListener extends NotificationListenerService {
     }
 
     static JSONObject nowPlaying(Context c) {
-        MediaController mc = current(c);
-        if (mc == null) return Util.obj("active", false);
+        return info(c, current(c));
+    }
+
+    /** One app's session, playing or not, for a screen that follows that app. */
+    static JSONObject nowPlaying(Context c, String pkg) {
+        return info(c, session(c, pkg));
+    }
+
+    private static JSONObject info(Context c, MediaController mc) {
+        if (mc == null || mc.getMetadata() == null) return Util.obj("active", false);
         MediaMetadata md = mc.getMetadata();
         PlaybackState st = mc.getPlaybackState();
         String label = mc.getPackageName();
@@ -226,15 +236,41 @@ public class NotifListener extends NotificationListenerService {
         if (title == null) title = md.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
         String artist = md.getString(MediaMetadata.METADATA_KEY_ARTIST);
         if (artist == null) artist = md.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE);
+        long duration = md.getLong(MediaMetadata.METADATA_KEY_DURATION);
+        long actions = st == null ? 0 : st.getActions();
+        String kind = App.I.apps.kind(mc.getPackageName());
         return Util.obj("active", true, "pkg", mc.getPackageName(), "app", label,
                 "title", title == null ? "" : title, "artist", artist == null ? "" : artist,
                 "playing", st != null && st.getState() == PlaybackState.STATE_PLAYING,
-                "position", st == null ? 0 : st.getPosition(),
-                "duration", md.getLong(MediaMetadata.METADATA_KEY_DURATION));
+                "position", positionOf(mc.getPackageName(), st, duration), "duration", duration,
+                "speed", st == null ? 0 : st.getPlaybackSpeed(),
+                "kind", kind, "video", "video".equals(kind),
+                "canSeek", (actions & PlaybackState.ACTION_SEEK_TO) != 0,
+                "canPrev", (actions & PlaybackState.ACTION_SKIP_TO_PREVIOUS) != 0,
+                "canNext", (actions & PlaybackState.ACTION_SKIP_TO_NEXT) != 0,
+                "canShow", canShow(c, mc));
+    }
+
+    /** PlaybackState holds the position at its last update; while playing it has moved on since, at the playback speed. */
+    static long position(PlaybackState st, long duration) {
+        if (st == null) return 0;
+        long p = st.getPosition();
+        if (st.getState() == PlaybackState.STATE_PLAYING && st.getLastPositionUpdateTime() > 0) {
+            p += (long) ((SystemClock.elapsedRealtime() - st.getLastPositionUpdateTime()) * st.getPlaybackSpeed());
+        }
+        if (duration > 0) p = Math.min(p, duration);
+        return Math.max(0, p);
     }
 
     static Bitmap art(Context c) {
-        MediaController mc = current(c);
+        return art(current(c));
+    }
+
+    static Bitmap art(Context c, String pkg) {
+        return art(session(c, pkg));
+    }
+
+    private static Bitmap art(MediaController mc) {
         if (mc == null || mc.getMetadata() == null) return null;
         MediaMetadata md = mc.getMetadata();
         Bitmap b = md.getBitmap(MediaMetadata.METADATA_KEY_ART);
@@ -243,24 +279,87 @@ public class NotifListener extends NotificationListenerService {
         return b;
     }
 
-    static String control(Context c, String pkg, String cmd) {
+    /** An app's session: the playing one if it has several, else one with something loaded. */
+    private static MediaController session(Context c, String pkg) {
+        MediaController best = null;
         for (MediaController mc : sessions(c)) {
             if (!mc.getPackageName().equals(pkg)) continue;
-            MediaController.TransportControls t = mc.getTransportControls();
             PlaybackState st = mc.getPlaybackState();
-            switch (cmd) {
-                case "toggle":
-                    if (st != null && st.getState() == PlaybackState.STATE_PLAYING) t.pause();
-                    else t.play();
-                    break;
-                case "next": t.skipToNext(); break;
-                case "prev": t.skipToPrevious(); break;
-                case "pause": t.pause(); break;
-                case "play": t.play(); break;
-                default: break;
-            }
-            return null;
+            if (mc.getMetadata() != null && st != null && st.getState() == PlaybackState.STATE_PLAYING) return mc;
+            if (best == null || best.getMetadata() == null && mc.getMetadata() != null) best = mc;
         }
-        return "Nothing is playing";
+        return best;
+    }
+
+    static String control(Context c, String pkg, String cmd) {
+        MediaController mc = session(c, pkg);
+        if (mc == null) return "Nothing is playing";
+        MediaController.TransportControls t = mc.getTransportControls();
+        PlaybackState st = mc.getPlaybackState();
+        switch (cmd) {
+            case "toggle":
+                if (st != null && st.getState() == PlaybackState.STATE_PLAYING) t.pause();
+                else t.play();
+                break;
+            case "next": t.skipToNext(); break;
+            case "prev": t.skipToPrevious(); break;
+            case "pause": t.pause(); break;
+            case "play": t.play(); break;
+            case "back10":
+            case "fwd10":
+                MediaMetadata md = mc.getMetadata();
+                long duration = md == null ? 0 : md.getLong(MediaMetadata.METADATA_KEY_DURATION);
+                long to = Math.max(0, positionOf(mc.getPackageName(), st, duration) + ("fwd10".equals(cmd) ? 10_000 : -10_000));
+                if (duration > 0) to = Math.min(duration, to);
+                t.seekTo(to);
+                seekPkg = mc.getPackageName();
+                seekTarget = to;
+                seekAt = SystemClock.elapsedRealtime();
+                break;
+            default: break;
+        }
+        return null;
+    }
+
+    /**
+     * The last ±10 s jump. Apps report where it went only once they've loaded it, which can take
+     * seconds, and a second tap before then goes on from the jump, not from the old position.
+     */
+    private static String seekPkg;
+    private static long seekTarget, seekAt;
+
+    /** Where an app's playback is: until it reports the last jump, where the jump went. */
+    private static long positionOf(String pkg, PlaybackState st, long duration) {
+        long reported = position(st, duration);
+        long since = SystemClock.elapsedRealtime() - seekAt;
+        if (since >= 15000 || !pkg.equals(seekPkg)) return reported;
+        long p = seekTarget + (st != null && st.getState() == PlaybackState.STATE_PLAYING ? (long) (since * st.getPlaybackSpeed()) : 0);
+        if (duration > 0) p = Math.min(duration, p);
+        return Math.abs(reported - p) < 1500 ? reported : p;
+    }
+
+    /** Whether the app behind a session can be brought up on another screen: it has a screen of its own to open. */
+    private static boolean canShow(Context c, MediaController mc) {
+        PendingIntent pi = mc.getSessionActivity();
+        return pi != null && pi.isActivity() || c.getPackageManager().getLaunchIntentForPackage(mc.getPackageName()) != null;
+    }
+
+    /**
+     * Opens the app behind a media session on a screen: the screen its session names (YouTube's is the
+     * watch page), else its launcher activity. A running app moves there with its task, so its video
+     * carries on where it was.
+     */
+    static boolean show(Context c, String pkg, int displayId) {
+        MediaController mc = session(c, pkg);
+        PendingIntent pi = mc == null ? null : mc.getSessionActivity();
+        if (pi != null && pi.isActivity()) {
+            try {
+                pi.send(c, 0, null, null, null, null, Screens.on(displayId));
+                return true;
+            } catch (PendingIntent.CanceledException e) {
+                Log.w(App.TAG, "session activity of " + pkg + " is gone: " + e);
+            }
+        }
+        return App.I.apps.launch(pkg, displayId);
     }
 }

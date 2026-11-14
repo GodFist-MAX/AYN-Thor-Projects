@@ -56,7 +56,11 @@ final class Api {
             case "/api/videos": return Resp.json(app.media.videos());
             case "/api/photos": return Resp.json(app.media.photos());
             case "/api/social": return Resp.json(app.social.snapshot("1".equals(r.q("refresh"))));
-            case "/api/nowplaying": return Resp.json(nowPlaying());
+            case "/api/nowplaying": {
+                String pkg = r.q("pkg");
+                return Resp.json(pkg == null || pkg.isEmpty() ? nowPlaying()
+                        : Util.obj("external", NotifListener.nowPlaying(app, pkg)));
+            }
             case "/api/queue": return Resp.json(MusicService.queue());
             case "/api/gameinfo": return Resp.json(gameInfo(r));
             case "/api/sysinfo": return Resp.json(sysInfo());
@@ -80,7 +84,7 @@ final class Api {
             case "/img/feed": return image(app.feeds.image(r.q("pkg"), r.q("p")), "image/jpeg");
             case "/img/thumb":
                 return image(app.media.thumb(r.q("type"), parseLong(r.q("id")), parseInt(r.q("s"), 320)), "image/jpeg");
-            case "/img/np": return nowPlayingArt();
+            case "/img/np": return nowPlayingArt(r.q("pkg"));
             case "/media/audio": return media(r, "audio");
             case "/media/video": return media(r, "video");
             case "/media/image": return media(r, "image");
@@ -217,10 +221,16 @@ final class Api {
         return o;
     }
 
-    private Resp nowPlayingArt() {
-        Bitmap b = MusicService.playing() || MusicService.art() != null && !NotifListener.nowPlaying(app).optBoolean("playing")
-                ? MusicService.art() : NotifListener.art(app);
-        if (b == null) b = MusicService.art();
+    /** The playing (or paused) item's picture; with pkg, that app's session's. */
+    private Resp nowPlayingArt(String pkg) {
+        Bitmap b;
+        if (pkg != null && !pkg.isEmpty()) {
+            b = NotifListener.art(app, pkg);
+        } else {
+            b = MusicService.playing() || MusicService.art() != null && !NotifListener.nowPlaying(app).optBoolean("playing")
+                    ? MusicService.art() : NotifListener.art(app);
+            if (b == null) b = MusicService.art();
+        }
         if (b == null) return Resp.text(404, "no art");
         Resp r = Resp.bytes(200, "image/png", Util.png(b));
         r.header("Cache-Control", "no-store");

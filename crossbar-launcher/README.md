@@ -93,3 +93,4 @@ How CrossBar uses it:
   - Worst stall before a frame dropped from about 125 ms to 18 ms.
 - **2026-11-13:** Bottom-screen feeds: recently played games, emulator saves, what media apps played, and feeds from other apps. Adds Settings › Media Settings › Clear Recently Played Media.
 - **2026-11-13:** Reports its own problems to Coronamon: script errors on either screen, web renderer crashes, and apps or games that fail to start.
+- **2026-11-14:** Now Playing works with video apps like AniDeck, YouTube and Google TV. Tapping the bottom screen's Now Playing bar brings the app's video down to the bottom screen, where it keeps playing and the menu keeps the controller. Over a game or app it opens a video card instead, with the picture, progress, ±10 s and track controls, Watch Here, and a button that opens the app itself, which is the choice offered when an app can't show its video there. Also stops a second bottom-screen companion from piling up after updates.

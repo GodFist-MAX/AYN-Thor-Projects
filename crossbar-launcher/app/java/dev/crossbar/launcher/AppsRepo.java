@@ -111,16 +111,20 @@ final class AppsRepo {
         if (pkg == null) return false;
         Boolean g = games.get(pkg);
         if (g == null) {
-            String kind;
-            try {
-                kind = classify(pm.getApplicationInfo(pkg, 0), pkg);
-            } catch (PackageManager.NameNotFoundException e) {
-                kind = "app";
-            }
+            String kind = kind(pkg);
             g = "game".equals(kind) || "emulator".equals(kind);
             games.put(pkg, g);
         }
         return g;
+    }
+
+    /** What classify() makes of an installed package: game, emulator, video, music, ... or "app". */
+    String kind(String pkg) {
+        try {
+            return classify(pm.getApplicationInfo(pkg, 0), pkg);
+        } catch (PackageManager.NameNotFoundException e) {
+            return "app";
+        }
     }
 
     static String classify(ApplicationInfo ai, String pkg) {

@@ -43,7 +43,11 @@ public class BottomActivity extends Activity {
         applyPerf();
         createWebView();
         hideSystemUi();
+        // After an update MainActivity.ensureBottom starts the companion as an ordinary task, and Home
+        // on this screen later starts the system's own home task: keep only the newest.
+        BottomActivity old = App.I.bottom;
         App.I.bottom = this;
+        if (old != null && old != this) old.finish();
         setFocusable(App.I.topVisible);
     }
 

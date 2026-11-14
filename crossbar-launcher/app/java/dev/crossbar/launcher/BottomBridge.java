@@ -73,6 +73,46 @@ final class BottomBridge {
         return "";
     }
 
+    /**
+     * Shows the video another app is playing, or has paused in the background, on this screen. Apps
+     * pause when they leave the screen, so playback is resumed once the app is up; the controller
+     * goes back to the menu if that's what the top screen shows by then.
+     */
+    @JavascriptInterface
+    public String watchHere(String pkg) {
+        Display d = act.getDisplay();
+        if (d == null) return "Couldn't show that video on this screen";
+        app.opening(false, false);
+        if (!NotifListener.show(act, pkg, d.getDisplayId())) {
+            app.back(false);
+            CoroBugs.launchFailed(act, "Couldn't show a video on the bottom screen", "package " + pkg);
+            return "Couldn't show that video on this screen";
+        }
+        for (long ms : new long[] {900, 2200}) {
+            app.main.postDelayed(() -> {
+                NotifListener.control(app, pkg, "play");
+                MainActivity m = app.top;
+                if (m == null || !app.topVisible) return;
+                app.bottomFocus = true;
+                m.focusTop();
+            }, ms);
+        }
+        return "";
+    }
+
+    /** Opens the app behind a media session on the top screen, at its player, moving it up if it's down here. */
+    @JavascriptInterface
+    public String openOnTop(String pkg) {
+        app.opening(true, app.apps.isGame(pkg));
+        if (!NotifListener.show(act, pkg, Display.DEFAULT_DISPLAY)) {
+            app.back(true);
+            CoroBugs.launchFailed(act, "Couldn't open an app on the top screen", "package " + pkg);
+            return "Couldn't open that app";
+        }
+        app.store.opened("app:" + pkg);
+        return "";
+    }
+
     @JavascriptInterface
     public void haptic(int ms) {
         Vibrator v = act.getSystemService(Vibrator.class);
