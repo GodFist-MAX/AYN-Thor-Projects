@@ -237,6 +237,25 @@
     ],
     "den": [
       ["", "Welcome to my den! Everything Grok made for your Thor is in here."]
+    ],
+    "bug_saved": [
+      ["", "Got it! Grok hears about {app} the moment we're back at the Mac."],
+      ["", "Written down! I'll hand this to Grok next time we plug in."]
+    ],
+    "bugs_sent": [
+      ["", "Told Grok about {msg}! Help is on the way!"],
+      ["", "Grok has {msg} now. Leave it to us!"]
+    ],
+    "bug_fixed": [
+      ["", "Grok fixed that {app} bug! Corona Knuckle of justice!"],
+      ["", "One less bug in {app}! It's stronger already!"]
+    ],
+    "bug_back": [
+      ["", "That {app} bug came back... I'll tell Grok it's not beaten yet!"]
+    ],
+    "published": [
+      ["", "{app} {version} is up on GitHub! Everyone can see our work now!"],
+      ["", "Our {app} update is on GitHub! That's a Prominence Beam of progress!"]
     ]
   }
 }

@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,7 +42,10 @@ final class Foreground {
     private final Registry registry;
     private final Handler main, work;
     private final Listener listener;
-    private Map<Integer, String> last = new HashMap<>();
+    private volatile Map<Integer, String> last = new HashMap<>();
+    private final Map<String, Long> onScreenAt = new ConcurrentHashMap<>();
+    /** The last app other than Coronamon's own screens (the den, the report trampoline) on each display. */
+    private final Map<Integer, String> lastApp = new ConcurrentHashMap<>();
     private final Map<String, Boolean> avoidCache = new HashMap<>();
     private boolean running, denied;
     private final File tmp;
@@ -77,9 +81,30 @@ final class Foreground {
         return !denied;
     }
 
+    /** Display id to the package in front, as of the last poll, looking past Coronamon's own screens. */
+    Map<Integer, String> current() {
+        Map<Integer, String> m = new HashMap<>(last);
+        for (Map.Entry<Integer, String> e : m.entrySet()) {
+            if (Registry.SELF.equals(e.getValue()) && lastApp.containsKey(e.getKey())) e.setValue(lastApp.get(e.getKey()));
+        }
+        return m;
+    }
+
+    boolean recentlyOnScreen(String pkg, long ms) {
+        Long t = onScreenAt.get(pkg);
+        return t != null && System.currentTimeMillis() - t <= ms;
+    }
+
     private void poll() {
         if (!running) return;
         Map<Integer, String> top = read();
+        if (top != null) {
+            long now = System.currentTimeMillis();
+            for (Map.Entry<Integer, String> e : top.entrySet()) {
+                onScreenAt.put(e.getValue(), now);
+                if (!Registry.SELF.equals(e.getValue())) lastApp.put(e.getKey(), e.getValue());
+            }
+        }
         if (top != null && !top.equals(last)) {
             last = top;
             Map<Integer, String> copy = new HashMap<>(top);

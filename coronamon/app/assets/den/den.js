@@ -2,12 +2,12 @@
   'use strict';
 
   const C = window.Coro;
-  const TABS = ['apps', 'activity', 'crashes', 'inbox', 'settings', 'about'];
-  const TITLES = { apps: 'Apps', activity: 'Activity', crashes: 'Crashes', inbox: 'Inbox', settings: 'Settings', about: 'About' };
+  const TABS = ['apps', 'activity', 'bugs', 'inbox', 'settings', 'about'];
+  const TITLES = { apps: 'Apps', activity: 'Activity', bugs: 'Bugs', inbox: 'Inbox', settings: 'Settings', about: 'About' };
   const QUIPS = {
     apps: 'Everything Grok Build made for the Thor. I keep an eye on all of it!',
     activity: "Builds, installs, crashes... I remember all of it.",
-    crashes: "When something falls over, I write down why.",
+    bugs: "Anything that breaks goes to Grok next time we're plugged into the Mac.",
     inbox: 'Drop APKs in Coronamon/inbox (or Download) and I can install them.',
     settings: 'How I hang out on your Thor.',
     about: "That's me! Coronamon, the little sun.",
@@ -119,6 +119,8 @@
     build: ['Build', 'info'], build_start: ['Build started', 'info'], install: ['Install', 'good'], install_start: ['Installing', 'info'],
     crash: ['Crash', 'bad'], native: ['Native crash', 'bad'], anr: ['Froze', 'bad'], update_found: ['Update found', 'warn'],
     update: ['Update', 'warn'], start: ['Coronamon woke up', ''], shizuku: ['Shizuku', 'info'], shizuku_down: ['Shizuku stopped', 'warn'],
+    issue: ['Problem noted', 'warn'], report: ['You reported a problem', 'warn'], bugs_sent: ['Sent to Grok', 'info'],
+    bug_fixed: ['Bug fixed', 'good'], published: ['Put on GitHub', 'good'],
   };
 
   function activity() {
@@ -135,22 +137,170 @@
     });
   }
 
-  function crashes() {
-    const list = call('reports', '') || [];
-    if (!list.length) return [el('div', { class: 'empty' }, "No crashes. Everything's running strong!")];
-    return list.map((r) => el('div', { class: 'card' }, icon(r.pkg),
-      el('div', { class: 'body' }, el('div', { class: 'name' }, (r.kind === 'anr' ? 'Froze: ' : 'Crashed: ') + r.pkg),
-        el('div', { class: 'sub' }, r.headline), el('div', { class: 'sub' }, when(r.time))),
-      el('div', { class: 'actions' }, el('button', { onclick: () => openReport(r) }, 'Read'))));
+  const BUGKIND = {
+    crash: 'Crash', anr: 'Froze', native: 'Native crash', renderer: 'Page crash', js: 'Script error',
+    launch: "Couldn't start", freeze: 'Froze', error: 'Problem', report: 'You reported it',
+  };
+
+  function bugs() {
+    const d = call('bugs') || { bugs: [], waiting: 0, lastSync: 0 };
+    const status = d.waiting
+      ? d.waiting + (d.waiting === 1 ? ' bug is' : ' bugs are') + ' waiting for Grok. Plug the Thor into the Mac to send.'
+      : d.lastSync ? 'Grok has everything (last plugged in ' + ago(d.lastSync) + ').' : 'Nothing waiting for Grok.';
+    const bar = el('div', { class: 'bugbar' }, el('button', { class: 'primary', onclick: startReport }, 'Report a problem'),
+      el('span', { class: 'sub' }, status));
+    if (!d.bugs.length) return [bar, el('div', { class: 'empty' }, "No bugs. Everything's running strong!")];
+    return [bar].concat(d.bugs.map(bugCard));
   }
 
-  function openReport(r) {
-    const text = safe(() => call('report', r.path));
+  function bugCard(b) {
+    const badges = [];
+    if (b.state === 'fixed') badges.push(el('span', { class: 'badge good' }, b.fixedIn ? 'fixed in ' + b.fixedIn : 'fixed'));
+    else if (b.state === 'ignored') badges.push(el('span', { class: 'badge' }, 'ignored'));
+    else badges.push(el('span', { class: 'badge bad' }, b.reopened ? 'came back' : 'open'));
+    badges.push(b.rev > b.syncedRev ? el('span', { class: 'badge warn' }, 'waiting for Grok') : el('span', { class: 'badge info' }, 'Grok has it'));
+    if (b.issue) badges.push(el('span', { class: 'badge info' }, 'GitHub #' + b.issue));
+    if (b.external) badges.push(el('span', { class: 'badge' }, 'not made by Grok Build'));
+    const last = (b.versions || []).slice(-1)[0];
+    const sub = [BUGKIND[b.kind] || b.kind, b.count > 1 && b.count + ' times', last && 'v' + last, 'last ' + ago(b.last)]
+      .filter(Boolean).join('  ·  ');
+    const actions = [el('button', { onclick: () => openBug(b) }, 'Read')];
+    if (b.state === 'open') {
+      actions.push(el('button', { onclick: () => setBug(b, 'fixed', 'Marked fixed.') }, 'Fixed'));
+      actions.push(el('button', { onclick: () => setBug(b, 'ignored', 'Ignoring that one.') }, 'Ignore'));
+    } else {
+      actions.push(el('button', { onclick: () => setBug(b, 'open', 'Opened it again.') }, 'Reopen'));
+    }
+    return el('div', { class: 'card' }, b.pkg ? icon(b.pkg) : el('div', { class: 'noicon' }),
+      el('div', { class: 'body' }, el('div', { class: 'name' }, b.app || 'The Thor'), el('div', { class: 'sub' }, b.title),
+        el('div', { class: 'sub' }, sub), el('div', {}, badges)),
+      el('div', { class: 'actions' }, actions));
+  }
+
+  function setBug(b, state, done) {
+    if (safe(() => call('setBugState', b.id, state), done)) render();
+  }
+
+  function openBug(b) {
+    const text = safe(() => call('bugText', b.id));
     if (text == null) return;
-    document.getElementById('modal-title').textContent = r.pkg + ' - ' + when(r.time);
+    document.getElementById('modal-title').textContent = (b.app || 'The Thor') + ' - ' + b.title;
     document.getElementById('modal-body').textContent = text;
     document.getElementById('modal').hidden = false;
     document.getElementById('modal-close').focus();
+  }
+
+  // ---- problem report form ----
+
+  const CATEGORIES = ['Crashed or closed', 'Froze or slow', 'Looks wrong', "Doesn't work right", 'Sound or controls', 'Something else'];
+  let report = null;
+
+  function startReport() {
+    toast('Taking pictures of the screens...');
+    setTimeout(() => openReportForm(safe(() => call('startReport')) || {}), 60);
+  }
+
+  function reportApps(cap) {
+    const reg = safe(() => call('apps')) || [];
+    const byPkg = {};
+    for (const a of reg) byPkg[a.pkg] = a;
+    const out = [], seen = new Set();
+    const screens = cap.screens || {}, labels = cap.labels || {};
+    for (const where of ['top', 'bottom']) {
+      const p = screens[where];
+      if (!p || seen.has(p) || p === 'dev.grokbuild.coronamon') continue;
+      seen.add(p);
+      const a = byPkg[p];
+      out.push({ pkg: p, label: (a && a.label) || labels[p] || p, where: where + ' screen', built: !!(a && a.kind === 'built') });
+    }
+    for (const a of reg) {
+      if (a.kind !== 'built' || !a.installed || seen.has(a.pkg)) continue;
+      seen.add(a.pkg);
+      out.push({ pkg: a.pkg, label: a.label, built: true });
+    }
+    out.push({ pkg: '', label: 'The Thor itself', built: false });
+    return out;
+  }
+
+  function openReportForm(cap) {
+    const apps = reportApps(cap);
+    const thumbs = (cap.shots || []).map((p) => safe(() => call('thumb', p)) || '').filter(Boolean);
+    report = { capture: cap, apps, thumbs, pkg: apps[0].pkg, category: '', text: '', shots: true, github: false };
+    document.getElementById('report').hidden = false;
+    renderReport();
+    const first = document.querySelector('#report-body button');
+    if (first) first.focus();
+  }
+
+  function closeReportForm(discard) {
+    if (!report) return;
+    if (discard && report.capture && report.capture.dir) safe(() => call('discardReport', JSON.stringify(report.capture)));
+    report = null;
+    document.getElementById('report').hidden = true;
+  }
+
+  function choice(options, value, pick) {
+    return el('div', { class: 'seg' }, options.map(([v, label]) => el('button', {
+      class: v === value ? 'on' : '', onclick: () => { pick(v); renderReport(); },
+    }, label)));
+  }
+
+  function field(label, ...kids) {
+    return el('div', { class: 'field' }, el('div', { class: 'label' }, label), kids);
+  }
+
+  function renderReport() {
+    const r = report;
+    if (!r) return;
+    const body = document.getElementById('report-body');
+    const focused = document.activeElement && document.activeElement.textContent;
+    const app = r.apps.find((a) => a.pkg === r.pkg) || r.apps[0];
+    if (!app.built) r.github = false;
+    const text = el('textarea', { id: 'r-text', rows: 3, placeholder: 'What were you doing, and what happened?' });
+    text.value = r.text;
+    text.addEventListener('input', () => { r.text = text.value; });
+    text.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !text.value) { e.preventDefault(); C.keyboard(); }
+    });
+    const parts = [
+      field('Which app?', choice(r.apps.map((a) => [a.pkg, a.label + (a.where ? ' (' + a.where + ')' : '')]), r.pkg, (v) => { r.pkg = v; })),
+      field('What went wrong?', choice(CATEGORIES.map((c) => [c, c]), r.category, (v) => { r.category = v; })),
+      field('Tell Grok about it', text),
+    ];
+    if (r.thumbs.length) {
+      parts.push(field('Screenshots', el('div', { class: 'shots' }, r.thumbs.map((src) => el('img', { src, alt: '' }))),
+        choice([[true, 'Include them'], [false, 'Leave them out']], r.shots, (v) => { r.shots = v; }),
+        el('div', { class: 'note' }, 'Screenshots and logs only go to Grok on the Mac. They are never posted on GitHub.')));
+    } else if (r.capture.shizuku === false) {
+      parts.push(field('Screenshots', el('div', { class: 'note' }, 'Connect Shizuku (Settings tab) and I can add screenshots and logs.')));
+    }
+    if (app.built) {
+      parts.push(field('GitHub', choice([[false, 'Just tell Grok'], [true, 'Also post it on GitHub']], r.github, (v) => { r.github = v; }),
+        el('div', { class: 'note' }, 'GitHub issues are public: the app, its version, the kind of problem and what you wrote (with personal details taken out).')));
+    }
+    body.replaceChildren(...parts);
+    if (focused) {
+      const again = [...body.querySelectorAll('button')].find((b) => b.textContent === focused);
+      if (again) again.focus();
+    }
+  }
+
+  function sendReport() {
+    const r = report;
+    if (!r) return;
+    const text = r.text.trim();
+    if (!text && !r.category) {
+      toast('Pick what went wrong, or write a few words for Grok.');
+      return;
+    }
+    const b = safe(() => call('submitReport', JSON.stringify({
+      pkg: r.pkg, category: r.category || 'Something else', text, capture: r.capture, shots: r.shots, github: r.github,
+    })));
+    if (!b) return;
+    report = null;
+    document.getElementById('report').hidden = true;
+    toast("Saved! Grok gets it next time the Thor is plugged into the Mac.");
+    show('bugs');
   }
 
   function inbox() {
@@ -217,7 +367,7 @@
       el('p', { style: 'color:var(--muted)' }, 'Version ' + (st.version || '?') + '. Coronamon and Digimon belong to Bandai Namco; this is a fan-made companion for personal use.'))];
   }
 
-  const VIEWS = { apps, activity, crashes, inbox, settings, about };
+  const VIEWS = { apps, activity, bugs, inbox, settings, about };
 
   function render() {
     const view = document.getElementById('view');
@@ -248,9 +398,9 @@
   // ---- gamepad and d-pad focus ----
 
   function focusables() {
-    const modal = document.getElementById('modal');
-    const root = modal.hidden ? document : modal;
-    return [...root.querySelectorAll('button:not([disabled])')].filter((b) => b.offsetParent !== null);
+    const modal = document.getElementById('modal'), form = document.getElementById('report');
+    const root = !modal.hidden ? modal : !form.hidden ? form : document;
+    return [...root.querySelectorAll('button:not([disabled]), textarea')].filter((b) => b.offsetParent !== null);
   }
 
   function move(dir) {
@@ -282,13 +432,16 @@
 
   document.addEventListener('keydown', (e) => {
     const dirs = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
-    if (dirs[e.key]) {
+    const typing = document.activeElement && document.activeElement.tagName === 'TEXTAREA';
+    if (dirs[e.key] && !(typing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) {
       e.preventDefault();
       move(dirs[e.key]);
     }
   });
 
   document.getElementById('modal-close').addEventListener('click', () => { document.getElementById('modal').hidden = true; });
+  document.getElementById('report-cancel').addEventListener('click', () => closeReportForm(true));
+  document.getElementById('report-send').addEventListener('click', sendReport);
   for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => show(t.dataset.tab));
 
   window.den = {
@@ -303,10 +456,21 @@
         modal.hidden = true;
         return true;
       }
+      if (report) {
+        closeReportForm(true);
+        return true;
+      }
       return false;
     },
     refresh() {
       render();
+    },
+    checkReport() {
+      const cap = safe(() => call('takeReport'));
+      if (!cap) return;
+      closeReportForm(true);
+      show('bugs');
+      openReportForm(cap);
     },
   };
 
@@ -315,5 +479,6 @@
   show('apps');
   const first = document.querySelector('.tab.active');
   if (first) first.focus();
-  setInterval(() => { if (document.getElementById('modal').hidden && current !== 'settings') render(); }, 15000);
+  den.checkReport();
+  setInterval(() => { if (document.getElementById('modal').hidden && !report && current !== 'settings') render(); }, 15000);
 })();

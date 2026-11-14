@@ -1,0 +1,73 @@
+{
+  "_help": "Where coro publishes updates and files bugs. Each project's files are copied from src into the repo folder of the same name (or dir). Entries ending in / are whole folders, mirrored including deletions. issues: all, none, a list of bug kinds (crash, anr, native, renderer, js, launch, report), or driver (native crashes in a Thor Turnip driver, whatever app was running).",
+  "repo": "~/AYN-Thor-Projects",
+  "slug": "GodFist-MAX/AYN-Thor-Projects",
+  "projects": {
+    "thor-tools": {
+      "label": "Thor tools",
+      "src": "~/thor-naruto",
+      "files": ["ui_nodes.sh"],
+      "issues": "none"
+    },
+    "turnip-drivers": {
+      "label": "Thor Turnip drivers",
+      "src": "~/thor-turnip",
+      "files": [
+        "build_thor_turnip.sh",
+        "thor_recipe.py",
+        "test/vktest.c",
+        "test/shaders.h",
+        "test/shaders/",
+        {"from": "out/thor/Thor_Standard_Turnip_v39.zip", "to": "releases/Thor_Standard_Turnip_v39.zip"},
+        {"from": "out/thor-patched/Thor_MeshShaders_Turnip_v39.zip", "to": "releases/Thor_MeshShaders_Turnip_v39.zip"}
+      ],
+      "issues": "driver"
+    },
+    "naruto-port-english": {
+      "label": "Naruto port English build",
+      "pkg": "com.naruto.stormgenerations",
+      "src": "~/thor-naruto/translate",
+      "files": ["build_en_apk.sh", "apply_translations.py", "translations.py", "repack.py", "dex_strings.py", "smali_strings.py"],
+      "issues": ["crash"]
+    },
+    "thor-finder": {
+      "label": "Thor Finder",
+      "src": "~/thor-files",
+      "files": ["thor-finder.sh", "thor_webdav_proxy.py"],
+      "issues": "none"
+    },
+    "coronamon": {
+      "label": "Coronamon",
+      "pkg": "dev.grokbuild.coronamon",
+      "src": "~/thor-coronamon",
+      "files": ["build.sh", "coro", "corolink.py", "grok-hook.sh", "github.json", "app/", "preview/", "test/crashtest/"],
+      "issues": "all"
+    },
+    "anideck": {
+      "label": "AniDeck",
+      "pkg": "dev.anideck.app",
+      "src": "~/anideck",
+      "files": ["build.sh", "app/", "dev/cdp.py", "dev/hist.py", "dev/pad.sh", "tools/make_icon.py"],
+      "issues": "all"
+    },
+    "crossbar-launcher": {
+      "label": "CrossBar",
+      "pkg": "dev.crossbar.launcher",
+      "src": "~/xmb-launcher",
+      "files": [
+        "build.sh", "app/",
+        "dev/cdp.py", "dev/connect.sh", "dev/devserver.py", "dev/dual.sh", "dev/perf.py", "dev/shot.sh",
+        "tools/walls.py", "tools/make_icon.py", "tools/sync_googletv.sh"
+      ],
+      "issues": "all"
+    }
+  },
+  "exclude": ["keys/", "build/", "__pycache__/", "*.pyc", "*.jks", "*.keystore", "*.pass", "*.idsig", "*.apk", "*.log", "home.json"],
+  "secretFiles": [
+    "~/thor-coronamon/keys/*.pass",
+    "~/xmb-launcher/keys/*.pass",
+    "~/anideck/keys/*.pass",
+    "~/thor-naruto/translate/*.pass",
+    "~/xmb-launcher/dev/.token"
+  ]
+}

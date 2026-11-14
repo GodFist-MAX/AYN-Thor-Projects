@@ -68,6 +68,7 @@ final class Brain {
     private long tapsAt;
     private float gameCheck;
     private final Map<String, Long> lastSaid = new HashMap<>();
+    private long lastReaction;
 
     /** The build or install he is helping with, or null. */
     String job, jobApp;
@@ -539,6 +540,7 @@ final class Brain {
         jobSince = System.currentTimeMillis();
         if (held || air) return;
         interrupt();
+        lastReaction = jobSince;
         if ("build".equals(kind)) {
             tasks.add(new Play(Moves.SURPRISED, 0));
             tasks.add(new Play(Moves.BAKE, 12).saying("build_start", v, 1));
@@ -556,6 +558,7 @@ final class Brain {
         endJob();
         if (held || air) return;
         interrupt();
+        lastReaction = System.currentTimeMillis();
         if (ok) {
             if ("build".equals(kind)) {
                 tasks.add(new Play(Moves.CELEBRATE, 0).saying("build_ok", v, 1));
@@ -574,9 +577,19 @@ final class Brain {
     void crashed(String label, boolean anr) {
         if (held || air) return;
         interrupt();
+        lastReaction = System.currentTimeMillis();
         Map<String, String> v = vars(label, null, null);
         tasks.add(new Play(Moves.SURPRISED, 0));
         tasks.add(new Play(Moves.OOPS, 0).saying(anr ? "anr" : "crash", v, 1));
+    }
+
+    /** News about bugs and GitHub, queued behind a reaction that's still playing instead of cutting it off. */
+    void news(String key, Map<String, String> v, boolean happy) {
+        if (held || air || ghost) return;
+        long now = System.currentTimeMillis();
+        if (!host.speaking() && now - lastReaction > 8000) interrupt();
+        lastReaction = now;
+        tasks.add(new Play(happy ? Moves.CHEER : Moves.THINK, happy ? 0 : 3).saying(key, v, 1));
     }
 
     void updateFound(String label, String version, boolean canInstall, Prompt prompt) {

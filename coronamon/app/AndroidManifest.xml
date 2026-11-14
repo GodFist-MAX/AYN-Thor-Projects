@@ -40,6 +40,14 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ReportActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity="dev.grokbuild.coronamon.report"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <service
             android:name=".PetService"
             android:exported="false" />
@@ -60,6 +68,11 @@
         <provider
             android:name=".Bridge"
             android:authorities="dev.grokbuild.coronamon.bridge"
+            android:exported="true" />
+
+        <provider
+            android:name=".BugsProvider"
+            android:authorities="dev.grokbuild.coronamon.bugs"
             android:exported="true" />
 
         <provider

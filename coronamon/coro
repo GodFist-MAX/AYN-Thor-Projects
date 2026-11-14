@@ -5,7 +5,9 @@ Talks to the Coronamon app over adb (content://dev.grokbuild.coronamon.bridge).
 
   coro status                          what he's doing, permissions, screens
   coro install APK [--label L] [--project DIR] [--keep-installer]
-                                       install/update an app with Coronamon cheering it on
+               [--notes TEXT] [--summary TEXT] [--fixes BUG,...] [--no-publish]
+                                       install/update an app with Coronamon cheering it on, mark the bugs it
+                                       fixes, and publish the update to GitHub (notes go in the README history)
   coro wrap LABEL [--pkg P] -- CMD...  run a build command while he bakes; reports success or failure
   coro build-start LABEL | coro build-end LABEL ok|fail [--msg M]
   coro register PKG [--label L] [--project DIR] [--github OWNER/REPO] [--update-mode ask|auto|notify|off]
@@ -21,6 +23,14 @@ Talks to the Coronamon app over adb (content://dev.grokbuild.coronamon.bridge).
   coro setting [KEY [VALUE]] | coro lines [reload] | coro shizuku [request]
   coro setup                           grant permissions, start Shizuku, wake him
   coro log [N]                         his logcat
+
+Bugs, GitHub and Grok (corolink.py):
+  coro sync [--dry-run] [--no-github]  take new bugs from the Thor, open/update GitHub issues, push waiting commits
+  coro bugs [--all] [--local]          the bug log | coro bug ID [fixed [VERSION] | open | ignore | forget]
+  coro bug-report PKG "TEXT" [--category C] [--github]
+  coro publish PROJECT|--all [--notes N] [--summary S] [--version V] [--fixes BUGS] [--no-push] [--dry-run]
+  coro github [status|on|off|push]     coro watch [--status|--stop]
+  coro grok-hook install               hand new bugs to Grok Build sessions (session-start/post-tool run from the hook)
 """
 import base64
 import json
@@ -207,9 +217,15 @@ def cmd_install(args):
     label = opt(args, "--label")
     project = opt(args, "--project")
     keep = flag(args, "--keep-installer")
+    notes = opt(args, "--notes")
+    summary = opt(args, "--summary")
+    fixes = opt(args, "--fixes")
+    publish = not flag(args, "--no-publish")
     if not args:
-        raise CoroError("usage: coro install APK [--label L] [--project DIR]")
-    install_flow(args[0], label, project, keep)
+        raise CoroError("usage: coro install APK [--label L] [--project DIR] [--notes N] [--fixes BUGS] [--no-publish]")
+    info = install_flow(args[0], label, project, keep)
+    corolink.after_install(info, project or guess_project(args[0]), notes=notes, summary=summary, fixes=fixes,
+                           publish_it=publish)
 
 
 def cmd_wrap(args):
@@ -453,6 +469,13 @@ COMMANDS = {
 }
 
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import corolink  # noqa: E402
+
+corolink.setup(sys.modules[__name__])
+COMMANDS.update(corolink.COMMANDS)
+
+
 def main():
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help", "help"):
@@ -466,6 +489,9 @@ def main():
         fn(args[1:])
     except CoroError as e:
         print("coro: %s" % e, file=sys.stderr)
+        sys.exit(1)
+    except corolink.Busy:
+        print("coro: another coro is syncing or publishing; try again in a moment", file=sys.stderr)
         sys.exit(1)
     except subprocess.TimeoutExpired:
         print("coro: adb timed out", file=sys.stderr)

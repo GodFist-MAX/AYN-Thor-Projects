@@ -85,6 +85,39 @@ public final class Bridge extends ContentProvider {
                 return Util.obj("ok", true, "running", true, "version", s.version());
             case "status":
                 return ok(s.status());
+            case "bugs": {
+                int max = (int) parseFloat(str(in, "max", b64), 40);
+                return Util.obj("ok", true, "rev", s.bugs.rev(), "waiting", s.bugs.waiting(),
+                        "bugs", s.bugs.list(arg == null ? "unsynced" : arg, Math.max(1, max)));
+            }
+            case "bug": {
+                JSONObject b = s.bugs.get(arg);
+                return b == null ? Util.obj("ok", false, "error", "no bug " + arg) : Util.obj("ok", true, "bug", b);
+            }
+            case "bugs-ack": {
+                JSONArray acks = Util.parseArray(str(in, "acks", b64));
+                JSONArray firstTime = s.bugs.ack(acks);
+                s.bugsAcked(firstTime);
+                return Util.obj("ok", true, "acked", acks.length(), "firstTime", firstTime.length());
+            }
+            case "bug-state": {
+                String state = str(in, "state", b64);
+                JSONObject b = s.bugs.setState(arg, state, str(in, "version", b64));
+                if (b == null) return Util.obj("ok", false, "error", "no bug " + arg + ", or state isn't open, fixed or ignored");
+                if ("fixed".equals(state) && !"quiet".equals(str(in, "react", b64))) s.bugFixed(b);
+                return Util.obj("ok", true, "bug", b);
+            }
+            case "bug-report": {
+                JSONObject b = s.reportProblem(arg, nz(str(in, "category", b64)).isEmpty() ? "Something else" : str(in, "category", b64),
+                        str(in, "text", b64), null, "true".equals(str(in, "github", b64)));
+                return Util.obj("ok", true, "bug", b);
+            }
+            case "bug-forget":
+                return Util.obj("ok", s.bugs.forget(arg));
+            case "published": {
+                s.published(arg, str(in, "label", b64), str(in, "version", b64), str(in, "url", b64));
+                return Util.obj("ok", true);
+            }
             case "say": {
                 String key = str(in, "key", b64);
                 Lines.Line line = key != null ? s.lines.pick(key, Brain.vars(str(in, "app", b64), str(in, "version", b64), str(in, "msg", b64)))

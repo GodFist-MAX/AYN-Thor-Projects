@@ -11,7 +11,9 @@ Package: `dev.grokbuild.coronamon`
 - **Keeps a registry:** every app built with Grok Build or installed over adb, with versions and history.
 - **Installs and updates apps:** as their installer of record, through Shizuku. He keeps the last three APKs of each in `/sdcard/Coronamon/apks/`, and checks GitHub releases every 12 hours.
 - **Watches for crashes and ANRs:** he saves reports to `/sdcard/Coronamon/reports/<package>/`.
-- **The Den:** an in-app page with the registry, history, crash reports and settings.
+- **Keeps a bug log:** crashes, freezes and native crashes of the apps built with Grok Build (and of other apps while they're on screen), plus problems those apps report themselves, such as script errors, renderer crashes and launches that fail. A repeat counts against the same bug. A bug marked fixed that shows up again in the fixed version or later reopens.
+- **Report a problem:** from the Den or his notification. He takes screenshots of both screens and the logs of the apps on them; you pick the app, what went wrong, and whether it may go to GitHub.
+- **The Den:** an in-app page with the registry, history, crash reports, the bug log and settings.
 - **Reacts to builds and installs** run through the `coro` command-line tool on the Mac.
 - **Speech:** his lines are in `app/assets/lines.json`. Add your own in `/sdcard/Coronamon/lines.json`.
 
@@ -21,8 +23,9 @@ Package: `dev.grokbuild.coronamon`
 
 ```text
 coro status                          what he's doing, permissions, screens
-coro install APK [--label L] [--project DIR]
-                                     install or update an app with Coronamon as its installer
+coro install APK [--label L] [--project DIR] [--notes N] [--fixes BUGS] [--no-publish]
+                                     install or update an app with Coronamon as its installer,
+                                     then publish the update here (see below)
 coro wrap LABEL -- CMD...            run a build while he bakes; reports success or failure
 coro register PKG [--github OWNER/REPO] [--update-mode ask|auto|notify|off] [--avoid yes|no]
 coro registry | history [N] | reports [PKG] | check [PKG] | update PKG
@@ -32,6 +35,27 @@ coro setup                           grant permissions, start Shizuku, wake him
 ```
 
 Run `coro --help` for everything.
+
+## Bugs, GitHub and Grok Build
+
+`corolink.py`, loaded by `coro`, connects the bug log to this repository and to Grok Build.
+
+- **To Grok Build:** while the Thor is plugged into the Mac, a watcher (`coro watch`) pulls new bugs into `~/thor-coronamon/bugs/`. The Grok Build hook shows a summary when a session starts and gives the model the details once, after its next tool call. `coro grok-hook install` writes the hook to `~/.grok/hooks/coronamon.json`.
+- **To GitHub issues:** each new bug in an app built here opens an issue, labeled `from-thor`, the kind of bug and the project. Repeats, regressions and fixes add comments. A fix closes the issue, and the issue reopens if the bug comes back. The issue holds the crash's signature and a short excerpt, with paths, accounts, addresses, tokens and the device serial removed. Screenshots and full logs stay on the Mac. A problem you report yourself goes to GitHub only if you choose that.
+- **Updates:** `coro install APK --notes "..."` commits the project's changed files here as "Update <app> to <version>", listing the files and adding "Fixes #N" for the bugs it fixes (`--fixes`). It adds a line to the project's History and pushes. Without internet, the commit waits and is pushed later.
+
+```text
+coro sync [--dry-run] [--no-github]  pull new bugs, open or update issues, push waiting commits
+coro bugs [--all] | coro bug ID [fixed [VERSION] | open | ignore | forget]
+coro bug-report PKG "TEXT" [--category C] [--github]
+coro publish PROJECT|--all [--notes N] [--version V] [--fixes BUGS] [--dry-run]
+coro github status|on|off|push       coro watch [--status|--stop]
+coro grok-hook install
+```
+
+`github.json` maps each project's source files to its folder in this repository and sets which bugs become issues. `coro github off` stops all posting and pushing; bugs still go to Grok Build.
+
+Apps report their own problems through the provider `content://dev.grokbuild.coronamon.bugs` (method `report`, with `kind`, `title` and `detail` extras). Only apps in his registry that were built with Grok Build can use it. The title may be posted publicly; the detail only goes to Grok Build.
 
 ## Build
 
@@ -67,3 +91,4 @@ Coronamon is a Digimon (© Bandai, Toei Animation). This is a fan project. Speec
 - **2026-11-12:** First version: the overlay on both screens, the app registry, installs and updates, crash reports, GitHub update checks, the Den, and the `coro` tool.
 - **2026-11-12:** Art redesigned twice the same evening to look like his Digimon Story: Time Stranger model. The head and mane were traced from the in-game silhouette, with a new face and bigger fists.
 - **2026-11-12:** Silent installs and updates through Shizuku.
+- **2026-11-13:** Bug log: crashes, freezes and the problems apps report themselves, plus Report a problem with screenshots and logs. When the Thor is plugged into the Mac, new bugs go to Grok Build and to GitHub issues here, and coro install publishes each update to this repository.

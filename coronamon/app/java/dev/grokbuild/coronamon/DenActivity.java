@@ -19,14 +19,20 @@ import org.json.JSONObject;
 import java.io.File;
 import java.util.Arrays;
 
-/** Coronamon's den: the apps he looks after, what happened lately, crash reports and settings. */
+/** Coronamon's den: the apps he looks after, what happened lately, bugs, problem reports and settings. */
 public final class DenActivity extends Activity {
+    /** A capture from ReportActivity (JSON); the den opens the report form with it. */
+    static final String EXTRA_REPORT = "report";
+
     private WebView web;
+    private volatile String pendingReport;
+    private volatile int displayId = -1;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         PetService.start(this);
+        pendingReport = getIntent().getStringExtra(EXTRA_REPORT);
         web = new WebView(this);
         web.setBackgroundColor(0xFF1B0E0A);
         WebSettings ws = web.getSettings();
@@ -55,7 +61,31 @@ public final class DenActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (getDisplay() != null) displayId = getDisplay().getDisplayId();
         if (web != null) web.evaluateJavascript("window.den && den.refresh()", null);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String r = intent.getStringExtra(EXTRA_REPORT);
+        if (r != null) {
+            pendingReport = r;
+            if (web != null) web.evaluateJavascript("window.den && den.checkReport()", null);
+        }
+    }
+
+    private static String reply(Object data) {
+        return Util.obj("ok", true, "data", data == null ? JSONObject.NULL : data).toString();
+    }
+
+    private static void deleteCapture(JSONObject capture) {
+        File dir = new File(capture.optString("dir"));
+        if (!dir.getName().startsWith("pending-") || !Bugs.FILES.equals(dir.getParentFile())) return;
+        File[] fs = dir.listFiles();
+        if (fs != null) for (File f : fs) f.delete();
+        dir.delete();
     }
 
     @Override
@@ -301,6 +331,109 @@ public final class DenActivity extends Activity {
                 s.setVisible(v);
                 return v;
             });
+        }
+
+        // ---- bugs and problem reports ----
+
+        @JavascriptInterface
+        public String bugs() {
+            return call(s -> Util.obj("bugs", s.bugs.list("all", 200), "waiting", s.bugs.waiting(), "lastSync", s.bugs.lastSync()));
+        }
+
+        @JavascriptInterface
+        public String bugText(String id) {
+            return call(s -> s.bugs.detail(id));
+        }
+
+        @JavascriptInterface
+        public String setBugState(String id, String state) {
+            return call(s -> {
+                JSONObject b = s.bugs.setState(id, state, null);
+                if (b == null) throw new IllegalArgumentException("no bug " + id);
+                return b;
+            });
+        }
+
+        /** Shows the soft keyboard for the focused text box (the d-pad can focus it, but only a tap opens the keyboard). */
+        @JavascriptInterface
+        public void keyboard() {
+            runOnUiThread(() -> {
+                web.requestFocus();
+                getSystemService(android.view.inputmethod.InputMethodManager.class).showSoftInput(web, 0);
+            });
+        }
+
+        @JavascriptInterface
+        public String takeReport() {
+            String r = pendingReport;
+            pendingReport = null;
+            return reply(r == null ? null : Util.parse(r));
+        }
+
+        /** Captures the screens (except the den's) and the apps' logs. Runs on the bridge thread, not the main one. */
+        @JavascriptInterface
+        public String startReport() {
+            PetService s = PetService.instance;
+            if (s == null) return Util.obj("ok", false, "error", "Coronamon is waking up").toString();
+            runOnUiThread(() -> s.hideFor(8000));
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException ignored) {
+            }
+            JSONObject capture = Capture.take(s, displayId);
+            runOnUiThread(() -> s.hideFor(0));
+            return reply(capture);
+        }
+
+        /** {pkg, category, text, capture, shots, github} */
+        @JavascriptInterface
+        public String submitReport(String json) {
+            JSONObject r = Util.parse(json);
+            String pkg = r.optString("pkg");
+            JSONObject capture = r.optJSONObject("capture");
+            if (capture != null && !capture.optString("dir").isEmpty()) {
+                if (!r.optBoolean("shots", true)) {
+                    JSONArray shots = capture.optJSONArray("shots");
+                    for (int i = 0; shots != null && i < shots.length(); i++) new File(shots.optString(i)).delete();
+                    Util.put(capture, "shots", new JSONArray());
+                }
+                JSONObject logs = capture.optJSONObject("logs");
+                if (logs == null) Util.put(capture, "logs", logs = new JSONObject());
+                if (!pkg.isEmpty() && !logs.has(pkg) && Shell.granted()) {
+                    File lf = Capture.log(pkg, new File(capture.optString("dir")));
+                    if (lf != null) Util.put(logs, pkg, lf.getPath());
+                }
+            }
+            return call(s -> s.reportProblem(pkg, r.optString("category", "Something else"), r.optString("text"), capture,
+                    r.optBoolean("github")));
+        }
+
+        @JavascriptInterface
+        public String discardReport(String json) {
+            JSONObject capture = Util.parse(json);
+            deleteCapture(capture);
+            return reply(true);
+        }
+
+        /** A small JPEG of a screenshot saved with a report. */
+        @JavascriptInterface
+        public String thumb(String path) {
+            try {
+                File f = new File(path).getCanonicalFile();
+                if (!f.getPath().startsWith(Bugs.FILES.getCanonicalPath() + "/")) throw new SecurityException("not a report file");
+                android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                android.graphics.BitmapFactory.decodeFile(f.getPath(), o);
+                o.inJustDecodeBounds = false;
+                o.inSampleSize = Math.max(1, Integer.highestOneBit(Math.max(1, o.outWidth / 360)));
+                Bitmap b = android.graphics.BitmapFactory.decodeFile(f.getPath(), o);
+                if (b == null) return reply("");
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                b.compress(Bitmap.CompressFormat.JPEG, 70, out);
+                return reply("data:image/jpeg;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP));
+            } catch (Exception e) {
+                return Util.obj("ok", false, "error", e.toString()).toString();
+            }
         }
     }
 }

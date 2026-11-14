@@ -58,6 +58,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     Lines lines;
     Registry registry;
     History history;
+    Bugs bugs;
     Brain brain;
     CrashWatch crashWatch;
     Foreground foreground;
@@ -147,7 +148,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         lines.load(this);
         registry = new Registry(this);
         history = new History(this);
-        for (File d : new File[]{Paths.ROOT, Paths.INBOX, Paths.APKS, Paths.REPORTS, Paths.DOWNLOADS}) d.mkdirs();
+        for (File d : new File[]{Paths.ROOT, Paths.INBOX, Paths.APKS, Paths.REPORTS, Paths.DOWNLOADS, Bugs.FILES}) d.mkdirs();
+        bugs = new Bugs(this);
         channels();
         startForeground(NOTIF, petNotification());
         brain = new Brain(this);
@@ -156,10 +158,20 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         int first = startStage();
         brain.place(first, stages.get(first).w * (0.3f + rnd.nextFloat() * 0.4f));
         getSystemService(DisplayManager.class).registerDisplayListener(this, main);
-        crashWatch = new CrashWatch(this, registry, main, this::onCrash);
-        crashWatch.start();
         foreground = new Foreground(this, registry, main, this::onTopApps);
         foreground.start();
+        crashWatch = new CrashWatch(this, registry, bugs, new CrashWatch.OnScreen() {
+            @Override
+            public JSONObject now() {
+                return screensNow();
+            }
+
+            @Override
+            public boolean recently(String pkg, long ms) {
+                return foreground.recentlyOnScreen(pkg, ms);
+            }
+        }, main, this::onCrash);
+        crashWatch.start();
         updates = new Updates(this, registry, main, updateListener);
         IntentFilter pf = new IntentFilter();
         pf.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -831,15 +843,96 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     private final Map<String, Long> cheered = new HashMap<>();
     private String lastOutside;
 
-    private void onCrash(String pkg, String kind, File report, String headline) {
+    private void onCrash(String pkg, String kind, File report, String headline, Bugs.Result bug, boolean managed, boolean react) {
         String label = registry.label(pkg);
-        JSONObject e = registry.entry(pkg);
-        int n = e == null ? 0 : e.optInt("crashes");
-        registry.upsert(pkg, Util.obj("lastCrash", System.currentTimeMillis(), "lastCrashKind", kind,
-                "lastCrashHeadline", headline, "crashes", n + 1));
-        history.add(kind, pkg, label, false, headline + " | " + report.getPath(), registry.live(pkg).optString("versionName"));
+        JSONArray versions = bug.bug.optJSONArray("versions");
+        String version = versions != null && versions.length() > 0 ? versions.optString(versions.length() - 1)
+                : registry.live(pkg).optString("versionName", null);
+        if (managed) {
+            JSONObject e = registry.entry(pkg);
+            int n = e == null ? 0 : e.optInt("crashes");
+            registry.upsert(pkg, Util.obj("lastCrash", bug.bug.optLong("last"), "lastCrashKind", kind,
+                    "lastCrashHeadline", headline, "crashes", n + 1));
+        }
+        if (react || bug.isNew) history.add(kind, pkg, label, false, headline + " | " + report.getPath(), version);
+        if (!managed || !react) return;
         brain.crashed(label, kind.equals("anr"));
-        notifyEvent(label + (kind.equals("anr") ? " froze" : " crashed"), headline + "\nReport saved to " + report.getPath(), null);
+        if (bug.cameBack) brain.news("bug_back", Brain.vars(label, version, null), false);
+        notifyEvent(label + (kind.equals("anr") ? " froze" : " crashed"),
+                headline + "\nSaved for Grok. It goes to the Mac next time the Thor is plugged in.", null);
+    }
+
+    /** Package in front on each screen, by screen name. */
+    JSONObject screensNow() {
+        JSONObject o = new JSONObject();
+        for (Map.Entry<Integer, String> e : foreground.current().entrySet()) {
+            if (e.getValue() != null) Util.put(o, Screens.name(e.getKey()), e.getValue());
+        }
+        return o;
+    }
+
+    // ---- bugs ----
+
+    /** A Grok-built app reported a problem it caught itself (renderer crash, script error, failed launch). */
+    void appReported(String pkg, String kind, String title, String detail) {
+        String label = registry.label(pkg);
+        String version = registry.live(pkg).optString("versionName", null);
+        Bugs.Result r = bugs.appReport(pkg, label, kind, title, detail, version, Util.obj("screens", screensNow()));
+        if (r.isNew || r.cameBack) history.add("issue", pkg, label, null, title, version);
+        if (r.cameBack) brain.news("bug_back", Brain.vars(label, version, null), false);
+    }
+
+    /** The user's own report from the den. pkg may be empty for a problem with the Thor itself. */
+    JSONObject reportProblem(String pkg, String category, String text, JSONObject capture, boolean github) {
+        boolean app = pkg != null && !pkg.isEmpty();
+        String label = app ? registry.label(pkg) : "the Thor";
+        String version = app ? registry.live(pkg).optString("versionName", null) : null;
+        JSONObject b = bugs.userReport(app ? pkg : "", label, version, category, text, capture, github);
+        history.add("report", app ? pkg : null, label, null, b.optString("title"), version);
+        brain.news("bug_saved", Brain.vars(label, version, null), true);
+        return b;
+    }
+
+    /** The Mac took bugs; firstTime are the ones Grok hadn't seen before. */
+    void bugsAcked(JSONArray firstTime) {
+        int n = firstTime.length();
+        if (n == 0) return;
+        JSONObject one = firstTime.optJSONObject(0);
+        String what = n == 1 ? one.optString("app") + "'s " + kindWord(one.optString("kind")) : n + " problems";
+        history.add("bugs_sent", null, null, true, what, null);
+        brain.news("bugs_sent", Brain.vars(n == 1 ? one.optString("app") : null, null, what), true);
+    }
+
+    void bugFixed(JSONObject b) {
+        history.add("bug_fixed", b.optString("pkg", null), b.optString("app"), true, b.optString("title"), b.optString("fixedIn", null));
+        brain.news("bug_fixed", Brain.vars(b.optString("app"), b.optString("fixedIn", null), b.optString("title")), true);
+    }
+
+    /** An update went up on GitHub from the Mac. */
+    void published(String pkg, String label, String version, String url) {
+        if (pkg != null && registry.has(pkg)) {
+            registry.upsert(pkg, Util.obj("published", version, "publishedAt", System.currentTimeMillis(), "publishedUrl", url));
+            label = registry.label(pkg);
+        }
+        history.add("published", pkg, label, true, url, version);
+        brain.news("published", Brain.vars(label, version, null), true);
+    }
+
+    private static String kindWord(String kind) {
+        switch (kind) {
+            case "anr":
+                return "freeze";
+            case "report":
+                return "report";
+            case "renderer":
+                return "page crash";
+            case "js":
+                return "script error";
+            case "launch":
+                return "launch problem";
+            default:
+                return "crash";
+        }
     }
 
     private void onTopApps(Map<Integer, String> top) {
@@ -929,6 +1022,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
                     "top", s.topPkg, "avoid", s.game, "scale", Math.round(s.k * 100) / 100.0));
         }
         Util.put(o, "stages", st);
+        Util.put(o, "bugs", Util.obj("waiting", bugs.waiting(), "rev", bugs.rev(), "lastSync", bugs.lastSync()));
         Util.put(o, "permissions", permissions());
         Util.put(o, "settings", settings.toJson());
         return o;
@@ -970,6 +1064,11 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         return PendingIntent.getActivity(this, 1, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
+    private PendingIntent reportIntent() {
+        Intent i = new Intent(this, ReportActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        return PendingIntent.getActivity(this, 4, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+
     private Notification petNotification() {
         String where = brain == null || stages.isEmpty() ? "on the Thor" : "on the " + brain.stage().name + " screen";
         String title = visible ? "Coronamon is hanging out " + where : "Coronamon is resting in his den";
@@ -980,6 +1079,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
                 .setContentIntent(denIntent())
                 .setOngoing(true)
                 .setShowWhen(false)
+                .addAction(new Notification.Action.Builder(null, "Report a problem", reportIntent()).build())
                 .addAction(new Notification.Action.Builder(null, "Switch screen", serviceIntent(ACTION_SWITCH, 2, null)).build())
                 .addAction(new Notification.Action.Builder(null, visible ? "Hide" : "Show", serviceIntent(ACTION_TOGGLE, 3, null)).build());
         return b.build();

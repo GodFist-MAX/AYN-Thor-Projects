@@ -11,7 +11,7 @@
   <div id="me"><img id="avatar" alt=""></div>
   <button class="tab" data-tab="apps">Apps</button>
   <button class="tab" data-tab="activity">Activity</button>
-  <button class="tab" data-tab="crashes">Crashes</button>
+  <button class="tab" data-tab="bugs">Bugs</button>
   <button class="tab" data-tab="inbox">Inbox</button>
   <button class="tab" data-tab="settings">Settings</button>
   <button class="tab" data-tab="about">About</button>
@@ -27,6 +27,14 @@
   <div class="sheet">
     <div class="sheet-head"><h2 id="modal-title"></h2><button id="modal-close">Close</button></div>
     <pre id="modal-body"></pre>
+  </div>
+</div>
+<div id="report" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>Report a problem</h2>
+      <div class="head-buttons"><button id="report-cancel">Cancel</button><button id="report-send" class="primary">Save for Grok</button></div>
+    </div>
+    <div id="report-body" class="form"></div>
   </div>
 </div>
 <div id="toast" hidden></div>
