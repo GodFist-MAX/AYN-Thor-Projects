@@ -66,6 +66,7 @@ final class BottomBridge {
         app.opening(false, app.apps.isGame(pkg));
         if (!app.apps.launch(pkg, d.getDisplayId())) {
             app.back(false);
+            CoroBugs.launchFailed(act, "Couldn't open an app on the bottom screen", "package " + pkg);
             return "Couldn't open that app on this screen";
         }
         app.store.opened("app:" + pkg);

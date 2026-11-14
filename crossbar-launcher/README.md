@@ -19,6 +19,7 @@ Package: `dev.crossbar.launcher`
   - joystick ring lights that follow the colors of the playing artwork
 - **Friends:** Steam friends (with your own Steam Web API key), Discord server widgets and Lanyard presence, and notifications from social apps.
 - **Performance presets:** in Settings › Performance Settings › Frame Rate and Battery.
+- **Problem reports:** when [Coronamon](../coronamon/README.md) is installed, script errors, renderer crashes and launches that fail go to his bug log, and from there to Grok Build and GitHub issues.
   - The choices are 60 FPS · Smooth (default), 60 FPS · Battery Saver, 30 FPS · Smooth and 30 FPS · Battery Saver.
   - Battery Saver stills the light wave when you leave the menu alone and checks for updates less often.
   - CrossBar goes idle while a game runs, whichever GPU driver the game uses.
@@ -91,3 +92,4 @@ How CrossBar uses it:
   - Backdrops are blurred ahead of time, and pictures load at the size they're shown.
   - Worst stall before a frame dropped from about 125 ms to 18 ms.
 - **2026-11-13:** Bottom-screen feeds: recently played games, emulator saves, what media apps played, and feeds from other apps. Adds Settings › Media Settings › Clear Recently Played Media.
+- **2026-11-13:** Reports its own problems to Coronamon: script errors on either screen, web renderer crashes, and apps or games that fail to start.

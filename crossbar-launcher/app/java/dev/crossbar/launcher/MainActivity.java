@@ -116,6 +116,7 @@ public class MainActivity extends Activity {
             @Override
             public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
                 Log.w(App.TAG, "WebView renderer gone; recreating");
+                CoroBugs.rendererGone(MainActivity.this, "top", d.didCrash());
                 h.post(() -> createWebView());
                 return true;
             }

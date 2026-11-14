@@ -35,8 +35,10 @@ const Api = {
   },
   log(msg) { fetch('/api/log', { method: 'POST', body: String(msg) }).catch(() => {}); },
 };
-window.addEventListener('error', e => Api.log('error: ' + e.message + ' @' + e.filename + ':' + e.lineno));
-window.addEventListener('unhandledrejection', e => Api.log('rejection: ' + (e.reason && (e.reason.stack || e.reason))));
+/* Uncaught errors go to the log and, through CrossBar, to Coronamon's bug log for Grok Build. */
+const PAGE = location.pathname.includes('bottom') ? 'bottom' : 'top';
+window.addEventListener('error', e => Api.log('error[' + PAGE + ']: ' + e.message + ' @' + e.filename + ':' + e.lineno));
+window.addEventListener('unhandledrejection', e => Api.log('rejection[' + PAGE + ']: ' + (e.reason && (e.reason.stack || e.reason))));
 
 /* Settings › Performance. The native side paces both screens to `fps`; the pages scale their own work. */
 const PERF_PRESETS = {

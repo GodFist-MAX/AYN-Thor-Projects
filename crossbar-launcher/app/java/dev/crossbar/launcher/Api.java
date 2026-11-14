@@ -68,9 +68,12 @@ final class Api {
                     app.settingsChanged();
                 }
                 return Resp.json(app.store.settings());
-            case "/api/log":
-                Log.i(App.TAG, "ui: " + r.bodyText());
+            case "/api/log": {
+                String msg = r.bodyText();
+                Log.i(App.TAG, "ui: " + msg);
+                CoroBugs.scriptError(app, msg);
                 return Resp.text(200, "ok");
+            }
             case "/img/app": return image(app.apps.icon(r.q("pkg"), r.q("cls")), "image/png");
             case "/img/shortcut": return image(app.apps.shortcutIcon(r.q("pkg"), r.q("id")), "image/png");
             case "/img/file": return imageFile(r);

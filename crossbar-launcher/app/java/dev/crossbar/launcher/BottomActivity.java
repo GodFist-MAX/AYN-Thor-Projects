@@ -82,6 +82,7 @@ public class BottomActivity extends Activity {
             @Override
             public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
                 Log.w(App.TAG, "bottom WebView renderer gone; recreating");
+                CoroBugs.rendererGone(BottomActivity.this, "bottom", d.didCrash());
                 h.post(() -> createWebView());
                 return true;
             }

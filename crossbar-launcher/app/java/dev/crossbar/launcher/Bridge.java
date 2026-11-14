@@ -30,6 +30,7 @@ final class Bridge {
         app.opening(true, app.apps.isGame(pkg));
         if (!app.apps.launch(pkg)) {
             app.back(true);
+            CoroBugs.launchFailed(act, "Couldn't open an app from the menu", "package " + pkg);
             return "Couldn't open that app";
         }
         app.store.launched("app:" + pkg);
@@ -65,6 +66,7 @@ final class Bridge {
             act.startActivity(i, Screens.on(android.view.Display.DEFAULT_DISPLAY));
         } catch (Exception e) {
             app.back(true);
+            CoroBugs.launchFailed(act, "Couldn't open a bottom-screen feed item", "package " + pkg + ": " + e);
             return "Couldn't open that app";
         }
         app.store.launched("app:" + pkg);
@@ -78,7 +80,10 @@ final class Bridge {
         app.opening(true, true);
         String err = Platforms.launch(act, g, player);
         if (err == null) app.store.launched("game:" + id);
-        else app.back(true);
+        else {
+            app.back(true);
+            CoroBugs.launchFailed(act, err, "game " + id + (player == null || player.isEmpty() ? "" : ", player " + player));
+        }
         return ok(err);
     }
 
@@ -87,7 +92,10 @@ final class Bridge {
         app.opening(true, app.apps.isGame(pkg));
         String err = app.apps.startShortcut(pkg, id);
         if (err != null && app.apps.launch(pkg)) return "";
-        if (err != null) app.back(true);
+        if (err != null) {
+            app.back(true);
+            CoroBugs.launchFailed(act, "Couldn't open an app shortcut", "package " + pkg + ", shortcut " + id + ": " + err);
+        }
         return ok(err);
     }
 
