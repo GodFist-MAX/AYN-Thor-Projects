@@ -42,6 +42,7 @@
   let theaterDeclined = false; // the user left fill-screen mode for this episode
   let playUntil = 0; // an episode picked from the app starts playing once it loads, until this time
   let expectUntil = 0; // playback should have started by this time (after a server or episode pick)
+  let seekT = null, seekAt = 0; // a seek the player hasn't reported reaching yet, and when it was made
   let failing = null; // servers tried for the episode on screen: { loc, names }
   let switching = false;
   let lastLoc = location.pathname + location.search;
@@ -152,6 +153,7 @@
   function reset(session) {
     player = embed ? { state: 'loading', t: 0, d: 0, error: '', session, at: Date.now() } : null;
     theaterDeclined = false;
+    seekT = null;
   }
 
   // Session ids end in the episode number. A session left over from the previous episode
@@ -175,6 +177,16 @@
   function start(e) {
     e.setMuted(false);
     e.play();
+  }
+
+  // While the app is in the background the player holds back its time updates until something else
+  // wakes it, and the ones it then sends are from before the latest seek. So until an update reaches
+  // the seek's target, the target is the position.
+  function seekTo(e, t) {
+    e.seek(t);
+    seekT = t;
+    seekAt = Date.now();
+    if (player) player.t = t;
   }
 
   // A server that fails often shows its error inside the player's frame without telling the page,
@@ -254,7 +266,10 @@
       player.state = 'playing';
     }
     if (player.state === 'playing') expectUntil = 0;
-    player.t = t;
+    if (seekT === null || Math.abs(t - seekT) < 1.5 || Date.now() - seekAt > 15000) {
+      seekT = null;
+      player.t = t;
+    }
     player.d = +d.duration || 0;
     player.at = Date.now();
     watchedCheck();
@@ -293,13 +308,19 @@
     const s = document.createElement('style');
     s.id = 'anideck-style';
     // Ancestors with a transform, filter or z-index would trap the fixed player inside them.
+    // The embedded player lays its video out from the top, so on a screen squarer than 16:9 (the
+    // bottom screen) the player is a centered 16:9 box over a black layer that also takes the taps.
     s.textContent = `
       html[data-anideck-theater], html[data-anideck-theater] body { overflow: hidden !important; }
       html[data-anideck-theater] :has(strmcx-embed) {
         transform: none !important; filter: none !important; backdrop-filter: none !important;
         contain: none !important; will-change: auto !important; z-index: auto !important; isolation: auto !important; }
+      html[data-anideck-theater]::after {
+        content: '' !important; position: fixed !important; inset: 0 !important; background: #000 !important;
+        z-index: 2147483646 !important; }
       html[data-anideck-theater] strmcx-embed {
-        position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important;
+        position: fixed !important; inset: calc((100vh - min(100vh, 56.25vw)) / 2) 0 auto !important;
+        width: 100vw !important; height: min(100vh, 56.25vw) !important;
         max-width: none !important; max-height: none !important; margin: 0 !important; border-radius: 0 !important;
         z-index: 2147483647 !important; background: #000 !important; }`;
     (document.head || document.documentElement).appendChild(s);
@@ -546,7 +567,7 @@
       case 'seekBy': if (e) e.seekBy(c.d); break;
       case 'seek':
         if (e) {
-          e.seek(c.t);
+          seekTo(e, c.t);
           if (c.play) start(e);
         }
         break;

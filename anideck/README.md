@@ -64,3 +64,4 @@ Only the adb shell, AniDeck itself and CrossBar may read it. Items open AniDeck 
 - **2026-11-13:** No more force close when the WebView renderer crashes; both screens reload instead.
 - **2026-11-13:** Recently played and saved shows on the bottom screen, and a feed for CrossBar's bottom screen.
 - **2026-11-13:** Reports web renderer crashes on either screen to Coronamon.
+- **2026-11-14:** Episodes can be watched on the bottom screen: when CrossBar's Now Playing moves AniDeck there, the episode fills the screen as a centered 16:9 picture with no companion, and both come back as they were on the top screen. Seeks from other apps' media controls now land and show right away, even while AniDeck is in the background.

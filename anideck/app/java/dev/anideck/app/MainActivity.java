@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -81,6 +82,10 @@ public class MainActivity extends Activity implements Net.Listener {
     private final Runnable hideToast = () -> toast.setVisibility(View.GONE);
     private final Runnable hideExit = () -> exitButton.setVisibility(View.GONE);
     private long escAt;
+    /** The display this activity was last on. CrossBar's Now Playing can move it to the bottom screen to watch there. */
+    private int displayId = Display.DEFAULT_DISPLAY;
+    /** Whether fill-screen mode was already on when the episode moved to the bottom screen, which turns it on. */
+    private boolean theaterBefore;
 
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -586,12 +591,45 @@ public class MainActivity extends Activity implements Net.Listener {
         super.onStart();
         App.I.topVisible = true;
         if (web != null) web.onResume();
-        ensureBottom();
+    }
+
+    @Override public void onConfigurationChanged(Configuration c) {
+        super.onConfigurationChanged(c);
+        screenChanged();
+    }
+
+    private boolean onBottomScreen() {
+        Display d = getDisplay();
+        return d != null && d.getDisplayId() != Display.DEFAULT_DISPLAY;
+    }
+
+    /**
+     * After a move between the screens. On the bottom screen the episode fills it and there's no
+     * companion, which would cover it; back on the top both return to how they were.
+     */
+    private void screenChanged() {
+        Display d = getDisplay();
+        int id = d == null ? Display.DEFAULT_DISPLAY : d.getDisplayId();
+        if (id == displayId) return;
+        displayId = id;
+        if (id != Display.DEFAULT_DISPLAY) {
+            BottomActivity b = App.I.bottom;
+            if (b != null) b.finish();
+            theaterBefore = state.optBoolean("theater");
+            if (!theaterBefore) cmd(App.obj("c", "theater", "on", true));
+        } else {
+            if (!theaterBefore && state.optBoolean("theater")) cmd(App.obj("c", "theater", "on", false));
+            ensureBottom();
+        }
+        hideSystemUi();
     }
 
     @Override protected void onResume() {
         super.onResume();
         resumed = true;
+        // When CrossBar moves the app to the other screen, onStart still sees the one it left.
+        screenChanged();
+        ensureBottom();
         hideSystemUi();
         if (refocusing) refocusing = false;
     }
@@ -631,7 +669,7 @@ public class MainActivity extends Activity implements Net.Listener {
     }
 
     private void ensureBottom() {
-        if (App.I.bottom != null) return;
+        if (App.I.bottom != null || onBottomScreen()) return;
         Display d = Screens.bottom(this);
         if (d == null) return;
         try {
@@ -646,7 +684,7 @@ public class MainActivity extends Activity implements Net.Listener {
      * system-wide focus. Restarting this activity is what moves display focus on the Thor.
      */
     void focusTop() {
-        if (!resumed || !App.I.bottomFocus || SystemClock.uptimeMillis() - refocusAt < 1000) return;
+        if (!resumed || !App.I.bottomFocus || onBottomScreen() || SystemClock.uptimeMillis() - refocusAt < 1000) return;
         App.I.bottomFocus = false;
         refocusAt = SystemClock.uptimeMillis();
         try {
