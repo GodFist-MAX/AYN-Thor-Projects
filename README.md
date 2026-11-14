@@ -18,7 +18,7 @@ Commits are in the order the projects were last updated, and each is dated to wh
 
 - **2026-11-11:** Turnip drivers, the Naruto port English build, Thor Finder
 - **2026-11-12:** CrossBar (with its bottom screen and joystick lights), AniDeck, Coronamon
-- **2026-11-13:** CrossBar performance presets and bottom-screen feeds; AniDeck crash recovery, recently played and saved shows; Coronamon bug log, with new bugs sent to Grok Build and GitHub issues; CrossBar problem reports to Coronamon
+- **2026-11-13:** CrossBar performance presets and bottom-screen feeds; AniDeck crash recovery, recently played and saved shows; Coronamon bug log, with new bugs sent to Grok Build and GitHub issues; CrossBar problem reports to Coronamon; AniDeck renderer crash reports to Coronamon
 
 ## Building
 

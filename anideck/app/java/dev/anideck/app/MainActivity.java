@@ -330,6 +330,7 @@ public class MainActivity extends Activity implements Net.Listener {
 
         @Override public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
             Log.w(App.TAG, "the page's renderer stopped; reloading");
+            CoroBugs.rendererGone(MainActivity.this, "top", d.didCrash());
             App.I.pageCrashed = true;
             root.removeView(web);
             web.destroy();

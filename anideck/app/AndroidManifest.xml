@@ -8,6 +8,11 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Coronamon's bug log, for reporting renderer crashes (CoroBugs). -->
+    <queries>
+        <provider android:authorities="dev.grokbuild.coronamon.bugs" />
+    </queries>
+
     <application
         android:name=".App"
         android:label="AniDeck"

@@ -79,6 +79,7 @@ public class BottomActivity extends Activity {
             /** Both screens share one renderer; if either WebView leaves this unhandled, Android kills the app. */
             @Override public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
                 Log.w(App.TAG, "the bottom screen's renderer stopped; reloading");
+                CoroBugs.rendererGone(BottomActivity.this, "bottom", d.didCrash());
                 ((ViewGroup) web.getParent()).removeView(web);
                 web.destroy();
                 web = null;

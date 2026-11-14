@@ -19,6 +19,7 @@ Package: `dev.anideck.app`
 - **Saved shows:** keep their details and cover art on the Thor, so they show without internet. Episodes always stream with the site's own player; downloads are blocked on purpose.
 - **Media session:** CrossBar's joystick lights follow it.
 - **Feed for CrossBar's bottom screen:** Continue Watching, Saved Shows and Watching on AniList.
+- **Problem reports:** when [Coronamon](../coronamon/README.md) is installed, renderer crashes go to his bug log, and from there to Grok Build and GitHub issues.
 
 ## Requirements
 
@@ -62,3 +63,4 @@ Only the adb shell, AniDeck itself and CrossBar may read it. Items open AniDeck 
 - **2026-11-12:** Controller and touch on both screens: highlight navigation, Select switches screens, and episode controls from either screen.
 - **2026-11-13:** No more force close when the WebView renderer crashes; both screens reload instead.
 - **2026-11-13:** Recently played and saved shows on the bottom screen, and a feed for CrossBar's bottom screen.
+- **2026-11-13:** Reports web renderer crashes on either screen to Coronamon.
