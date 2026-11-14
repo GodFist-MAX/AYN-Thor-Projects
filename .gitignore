@@ -1,0 +1,27 @@
+# Signing keys and their passwords (each build script makes its own on first run)
+keys/
+*.jks
+*.keystore
+*.pass
+*.idsig
+.token
+
+# Build output
+build/
+*.apk
+*.log
+.proxy.pid
+
+# Toolchains and downloaded binaries
+tools/jdk/
+tools/jre/
+tools/android-*/
+tools/*.jar
+android-ndk-*/
+venv/
+mesa/
+src-*/
+coronamon/libs/shizuku/
+thor-finder/rclone-android
+
+.DS_Store
