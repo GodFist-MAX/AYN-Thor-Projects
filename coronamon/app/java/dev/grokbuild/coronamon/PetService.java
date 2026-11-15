@@ -742,6 +742,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
             Util.put(f, "update", "");
             isNew = registry.upsert(pkg, f);
             foreground.forget(pkg);
+            cancelEvent("update:" + pkg);
         }
         boolean self = Registry.SELF.equals(pkg);
         if ("install".equals(kind)) main.postDelayed(() -> jobPkg = null, 3000);
@@ -830,6 +831,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         }
         boolean isNew = registry.upsert(pkg, f);
         foreground.forget(pkg);
+        cancelEvent("update:" + pkg);
         String installer = live.optString("installer", "adb");
         history.add("install", pkg, label, true, (fresh ? "installed" : "updated") + " by " + installer
                 + (isNew ? "; Coronamon is looking after it now" : ""), version);
@@ -859,7 +861,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         brain.crashed(label, kind.equals("anr"));
         if (bug.cameBack) brain.news("bug_back", Brain.vars(label, version, null), false);
         notifyEvent(label + (kind.equals("anr") ? " froze" : " crashed"),
-                headline + "\nSaved for Grok. It goes to the Mac next time the Thor is plugged in.", null);
+                headline + "\nSaved for Grok. It goes to the Mac next time the Thor is plugged in.", null, "bug:" + pkg);
     }
 
     /** Package in front on each screen, by screen name. */
@@ -904,6 +906,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     }
 
     void bugFixed(JSONObject b) {
+        cancelEvent("bug:" + b.optString("pkg"));
         history.add("bug_fixed", b.optString("pkg", null), b.optString("app"), true, b.optString("title"), b.optString("fixedIn", null));
         brain.news("bug_fixed", Brain.vars(b.optString("app"), b.optString("fixedIn", null), b.optString("title")), true);
     }
@@ -969,10 +972,15 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
                 return;
             }
             notifyEvent(label + " " + version + " is out", canInstall ? "Tap Update and Coronamon will install it."
-                    : "Grok needs to make a new build for this one.", canInstall ? pkg : null);
+                    : "Grok needs to make a new build for this one.", canInstall ? pkg : null, "update:" + pkg);
             brain.updateFound(label, version, canInstall, choice -> {
                 if (choice == 0) updates.fetch(pkg);
             });
+        }
+
+        @Override
+        public void upToDate(String pkg) {
+            cancelEvent("update:" + pkg);
         }
 
         @Override
@@ -1007,6 +1015,49 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         notifyEvent("Shizuku isn't running", "Pathfinder needs it. Connect the Thor to the Mac and run `coro setup`, or start it from the Shizuku app.", null);
     }
 
+    // ---- Grok Build on the Mac ----
+
+    private String grokState = "unknown", grokMsg;
+    private long grokSince;
+    private JSONObject grokLast;
+
+    /**
+     * What the Mac's watcher sees while the Thor is plugged in: whether Grok Build is running, and the
+     * automatic runs that fix what Coronamon found. msg is short enough to say; detail goes in the history.
+     */
+    boolean grok(String state, String msg, String detail, boolean ok) {
+        long now = System.currentTimeMillis();
+        String text = detail == null || detail.isEmpty() ? msg : detail;
+        Map<String, String> v = Brain.vars(null, null, msg);
+        switch (state) {
+            case "connected":
+                history.add("grok_connected", null, null, true, text, null);
+                brain.news("grok", v, true);
+                break;
+            case "away":
+                history.add("grok_away", null, null, null, text, null);
+                break;
+            case "fixing":
+                history.add("grok_fixing", null, null, null, text, null);
+                brain.news("grok_fixing", v, true);
+                break;
+            case "done":
+                history.add("grok_done", null, null, ok, text, null);
+                brain.news(ok ? "grok_done" : "grok_stuck", v, ok);
+                notifyEvent(ok ? "Grok Build finished" : "Grok Build stopped early", text, null, "grok");
+                grokLast = Util.obj("t", now, "ok", ok, "msg", text);
+                state = "connected";
+                text = (ok ? "Last run finished: " : "Last run stopped early: ") + text;
+                break;
+            default:
+                return false;
+        }
+        grokState = state;
+        grokMsg = text;
+        grokSince = now;
+        return true;
+    }
+
     // ---- status ----
 
     JSONObject status() {
@@ -1023,6 +1074,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         }
         Util.put(o, "stages", st);
         Util.put(o, "bugs", Util.obj("waiting", bugs.waiting(), "rev", bugs.rev(), "lastSync", bugs.lastSync()));
+        Util.put(o, "grok", Util.obj("state", grokState, "since", grokSince, "msg", grokMsg, "last", grokLast));
         Util.put(o, "permissions", permissions());
         Util.put(o, "settings", settings.toJson());
         return o;
@@ -1055,7 +1107,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
 
     private PendingIntent serviceIntent(String action, int code, String pkg) {
         Intent i = new Intent(this, PetService.class).setAction(action);
-        if (pkg != null) i.putExtra("pkg", pkg);
+        // Extras don't make PendingIntents distinct; the data does, so each app keeps its own Update button.
+        if (pkg != null) i.putExtra("pkg", pkg).setData(Uri.fromParts("package", pkg, null));
         return PendingIntent.getService(this, code, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
@@ -1094,6 +1147,11 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     private int eventId = 100;
 
     void notifyEvent(String title, String text, String updatePkg) {
+        notifyEvent(title, text, updatePkg, null);
+    }
+
+    /** A tagged notification replaces the last one with the same tag, and cancelEvent takes it away. */
+    void notifyEvent(String title, String text, String updatePkg, String tag) {
         Notification.Builder b = new Notification.Builder(this, CH_EVENTS)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle(title)
@@ -1102,8 +1160,14 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
                 .setContentIntent(denIntent())
                 .setAutoCancel(true);
         if (updatePkg != null) {
-            b.addAction(new Notification.Action.Builder(null, "Update", serviceIntent(ACTION_UPDATE, 500 + (eventId % 100), updatePkg)).build());
+            b.addAction(new Notification.Action.Builder(null, "Update", serviceIntent(ACTION_UPDATE, 500, updatePkg)).build());
         }
-        getSystemService(NotificationManager.class).notify(eventId++, b.build());
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (tag != null) nm.notify(tag, 0, b.build());
+        else nm.notify(eventId++, b.build());
+    }
+
+    void cancelEvent(String tag) {
+        getSystemService(NotificationManager.class).cancel(tag, 0);
     }
 }

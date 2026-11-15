@@ -48,7 +48,8 @@ final class Lines {
         if (!USER_FILE.exists()) {
             Util.writeText(USER_FILE, "{\n  \"_help\": \"Add your own lines: each entry is [source, text]. Situations: "
                     + "greet tap poke pickup throw dizzy land pet idle quote night sleepy wake train special bask dance think "
-                    + "build_start build_ok build_fail install_start install_ok install_fail update_found crash app_open game_open hop. "
+                    + "build_start build_ok build_fail install_start install_ok install_fail update_found crash app_open game_open hop "
+                    + "grok grok_fixing grok_done grok_stuck. "
                     + "{app} {version} and {msg} are filled in.\",\n  \"lines\": {\n    \"idle\": []\n  }\n}\n");
         }
         userStamp = USER_FILE.lastModified();

@@ -233,7 +233,19 @@
       ["", "Shizuku's asleep... Pathfinder needs it. Plug me into the Mac and Grok can wake it up!"]
     ],
     "grok": [
-      ["", "Grok's here! Let's build something awesome!"]
+      ["", "Grok's here! Let's build something awesome!"],
+      ["", "Grok Build is up on the Mac! I'll hand over the news!"]
+    ],
+    "grok_fixing": [
+      ["", "Grok's on it! Fixing {msg} while we hang out."],
+      ["", "Grok's rolling up its sleeves for {msg}. I'll keep watch!"]
+    ],
+    "grok_done": [
+      ["", "Grok's all done! My den has the details."],
+      ["", "Patched up and good as new! Corona Knuckle of teamwork!"]
+    ],
+    "grok_stuck": [
+      ["", "Grok had to stop early... It's all written down in my den."]
     ],
     "den": [
       ["", "Welcome to my den! Everything Grok made for your Thor is in here."]

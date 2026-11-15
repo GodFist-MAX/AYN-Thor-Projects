@@ -199,9 +199,16 @@ public final class Bridge extends ContentProvider {
                 return ok(s.settings.toJson());
             }
             case "check":
-                if (arg == null || arg.isEmpty()) s.updates.checkAll(true);
+                if (arg == null || arg.isEmpty()) s.updates.checkAll(!"false".equals(str(in, "announce", b64)));
                 else s.updates.checkOne(arg);
                 return Util.obj("ok", true, "started", true);
+            case "grok": {
+                boolean ok = !"false".equals(str(in, "ok", b64));
+                if (!s.grok(nz(arg), nz(str(in, "msg", b64)), str(in, "detail", b64), ok)) {
+                    return Util.obj("ok", false, "error", "grok needs --arg connected, away, fixing or done");
+                }
+                return Util.obj("ok", true);
+            }
             case "update":
                 s.updates.fetch(arg);
                 return Util.obj("ok", true, "started", true);

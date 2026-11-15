@@ -17,6 +17,8 @@ final class Updates {
     interface Listener {
         void found(String pkg, String label, String version, boolean canInstall);
 
+        void upToDate(String pkg);
+
         void progress(String pkg, String what);
 
         void ready(String pkg, File apk, String version, String sha256);
@@ -102,6 +104,7 @@ final class Updates {
         JSONObject before = e.optJSONObject("update");
         boolean fresh = newer && (before == null || !tag.equals(before.optString("version")));
         registry.upsert(pkg, fields);
+        if (!newer) main.post(() -> listener.upToDate(pkg));
         if (newer && (announce || fresh)) {
             boolean canInstall = asset != null && !"notify".equals(e.optString("updateMode"));
             String label = registry.label(pkg);

@@ -29,8 +29,16 @@ Bugs, GitHub and Grok (corolink.py):
   coro bugs [--all] [--local]          the bug log | coro bug ID [fixed [VERSION] | open | ignore | forget]
   coro bug-report PKG "TEXT" [--category C] [--github]
   coro publish PROJECT|--all [--notes N] [--summary S] [--version V] [--fixes BUGS] [--no-push] [--dry-run]
-  coro github [status|on|off|push]     coro watch [--status|--stop]
-  coro grok-hook install               hand new bugs to Grok Build sessions (session-start/post-tool run from the hook)
+  coro github [status|on|off|push]
+  coro watch [--status|--stop|--install|--uninstall]
+                                       the watcher that syncs and checks whenever the Thor is plugged in;
+                                       --install runs it from a login agent
+  coro grok-hook install               hand new bugs to Grok Build sessions and track which are mid-turn (the hook
+                                       runs the other grok-hook events)
+  coro autofix [status|on|off|test|stop|log [ID]]
+  coro autofix run [--dry-run] [--now] | hold [MINUTES|off] | skip KEY...|all
+                                       the Grok Build runs the watcher starts when the Thor is plugged in and
+                                       has new bugs to fix
 """
 import base64
 import json
@@ -168,6 +176,11 @@ def cmd_status(args):
     missing = [k for k, v in s["permissions"].items() if not v]
     print("  permissions: %s" % ("all granted" if not missing else "missing " + ", ".join(missing) + " (run coro setup)"))
     print("  shizuku: %s   app watching: %s" % (s["shizuku"], "working" if s["foregroundWorking"] else "off"))
+    g = s.get("grok") or {}
+    if g.get("state") and g["state"] != "unknown":
+        state = {"connected": "connected", "away": "not ready", "fixing": "fixing"}.get(g["state"], g["state"])
+        print("  grok build: %s since %s%s" % (state, time.strftime("%H:%M", time.localtime(g["since"] / 1000)),
+                                             " (%s)" % g["msg"] if g.get("msg") else ""))
 
 
 def install_flow(apk, label=None, project=None, keep_installer=False, quiet=False):

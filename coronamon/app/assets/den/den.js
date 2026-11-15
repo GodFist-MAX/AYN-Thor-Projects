@@ -121,20 +121,34 @@
     update: ['Update', 'warn'], start: ['Coronamon woke up', ''], shizuku: ['Shizuku', 'info'], shizuku_down: ['Shizuku stopped', 'warn'],
     issue: ['Problem noted', 'warn'], report: ['You reported a problem', 'warn'], bugs_sent: ['Sent to Grok', 'info'],
     bug_fixed: ['Bug fixed', 'good'], published: ['Put on GitHub', 'good'],
+    grok_connected: ['Grok Build connected', 'good'], grok_away: ['Grok Build not ready', 'warn'],
+    grok_fixing: ['Grok Build is fixing', 'info'], grok_done: ['Grok Build finished', 'good', 'Grok Build stopped early'],
   };
+
+  const GROK = { connected: ['Connected on the Mac', 'good'], away: ['Not ready on the Mac', 'warn'], fixing: ['Fixing things now', 'info'] };
+
+  function grokNow() {
+    const g = (safe(() => call('status')) || {}).grok;
+    if (!g || !GROK[g.state]) return null;
+    const [label, cls] = GROK[g.state];
+    return el('div', { class: 'event' }, el('div', { class: 'when' }, 'Grok Build'),
+      el('div', { class: 'what' }, el('div', {}, el('span', { class: 'dot ' + cls }), label + (g.since ? '  ·  ' + ago(g.since) : '')),
+        g.msg ? el('div', { class: 'msg' }, g.msg) : null));
+  }
 
   function activity() {
     const ev = (call('history', 120) || []).slice().reverse();
-    if (!ev.length) return [el('div', { class: 'empty' }, 'Nothing yet. It is very peaceful.')];
-    return ev.map((e) => {
+    const now = grokNow();
+    if (!ev.length) return [now, el('div', { class: 'empty' }, 'Nothing yet. It is very peaceful.')].filter(Boolean);
+    return [now].filter(Boolean).concat(ev.map((e) => {
       const k = KIND[e.kind] || [e.kind, ''];
       let cls = k[1];
       if (e.ok === false) cls = 'bad';
-      const title = k[0] + (e.ok === false && !/crash|froze/i.test(k[0]) ? ' failed' : '');
+      const title = e.ok === false && k[2] ? k[2] : k[0] + (e.ok === false && !/crash|froze/i.test(k[0]) ? ' failed' : '');
       return el('div', { class: 'event' }, el('div', { class: 'when' }, when(e.t)),
         el('div', { class: 'what' }, el('div', {}, el('span', { class: 'dot ' + cls }), title + (e.app ? ': ' + e.app : '') + (e.version ? ' ' + e.version : '')),
           e.msg ? el('div', { class: 'msg' }, e.msg) : null));
-    });
+    }));
   }
 
   const BUGKIND = {
