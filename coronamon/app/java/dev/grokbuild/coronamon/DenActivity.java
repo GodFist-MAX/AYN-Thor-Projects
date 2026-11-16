@@ -333,6 +333,23 @@ public final class DenActivity extends Activity {
             });
         }
 
+        // ---- the Mac: Grok Build's status, and the buttons that run coro there ----
+
+        @JavascriptInterface
+        public String mac() {
+            return call(PetService::macForDen);
+        }
+
+        @JavascriptInterface
+        public String control(String action, String arg) {
+            return call(s -> s.mac.request(action, arg));
+        }
+
+        @JavascriptInterface
+        public String diagnostics() {
+            return call(s -> s.diag.start());
+        }
+
         // ---- bugs and problem reports ----
 
         @JavascriptInterface

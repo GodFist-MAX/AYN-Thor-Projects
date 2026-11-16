@@ -182,6 +182,34 @@ textarea:focus { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(255, 200,
 .bugbar button { flex: none; white-space: nowrap; }
 .bugbar .sub { color: var(--muted); font-size: 11.5px; }
 
+.linkbar { padding: 2px 2px 8px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px 10px; }
+.kv { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid rgba(74, 39, 26, 0.6); }
+.kv:last-child { border-bottom: none; }
+.kv .k { width: 128px; flex: none; color: var(--muted); }
+.kv .v { flex: 1; min-width: 0; word-break: break-word; }
+.note { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+.reqs { margin-top: 8px; }
+.req { padding: 3px 2px; font-size: 12px; }
+.req .ago { color: var(--muted); font-size: 11px; margin-left: 8px; }
+.diag { margin-top: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px 10px 8px; }
+.diag h3 { margin: 2px 0 4px; color: var(--gold); font-size: 13.5px; }
+.diaghead { color: var(--gold); font-size: 12px; margin: 10px 0 2px; }
+.check { display: flex; align-items: baseline; padding: 3px 0; border-bottom: 1px solid rgba(74, 39, 26, 0.6); font-size: 12px; }
+.check .dot { flex: none; }
+.check .what { flex: 1; min-width: 0; word-break: break-word; }
+.check .fix { color: var(--muted); font-size: 11px; }
+.check .fix::before { content: "Fix: "; color: var(--orange); }
+pre.log { margin: 2px 0 0; padding: 6px 8px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--line); border-radius: 8px;
+  font: 10.5px/1.4 ui-monospace, "Roboto Mono", monospace; white-space: pre-wrap; word-break: break-word; color: var(--muted); }
+
+#confirm { position: fixed; inset: 0; background: rgba(10, 4, 2, 0.75); display: flex; align-items: center; justify-content: center; padding: 12px; }
+#confirm[hidden] { display: none; }
+.ask { background: var(--panel); border: 1px solid var(--orange); border-radius: 14px; padding: 12px 14px; max-width: 460px; }
+.ask h2 { margin: 0 0 6px; font-size: 15px; color: var(--gold); }
+.ask p { margin: 0 0 12px; color: var(--text); }
+.ask .head-buttons { justify-content: flex-end; }
+
 .sheet {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -212,4 +240,5 @@ textarea:focus { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(255, 200,
   #rail { width: 76px; }
   .row .label { width: 110px; }
   .event .when { width: 70px; }
+  .kv .k { width: 96px; }
 }

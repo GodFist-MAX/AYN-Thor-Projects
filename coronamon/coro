@@ -39,6 +39,9 @@ Bugs, GitHub and Grok (corolink.py):
   coro autofix run [--dry-run] [--now] | hold [MINUTES|off] | skip KEY...|all
                                        the Grok Build runs the watcher starts when the Thor is plugged in and
                                        has new bugs to fix
+  coro diagnostics                     check the Mac's side (watcher, adb, Grok Build, GitHub) and the Thor's
+                                       (the Den's Grok Build page has the same checks, and buttons for the
+                                       autofix and watch commands)
 """
 import base64
 import json

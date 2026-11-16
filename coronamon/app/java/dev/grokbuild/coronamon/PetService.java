@@ -63,6 +63,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     CrashWatch crashWatch;
     Foreground foreground;
     Updates updates;
+    Mac mac;
+    Diagnostics diag;
     final Handler main = new Handler(Looper.getMainLooper());
     private final Random rnd = new Random();
 
@@ -150,6 +152,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         history = new History(this);
         for (File d : new File[]{Paths.ROOT, Paths.INBOX, Paths.APKS, Paths.REPORTS, Paths.DOWNLOADS, Bugs.FILES}) d.mkdirs();
         bugs = new Bugs(this);
+        mac = new Mac(this);
+        diag = new Diagnostics(this);
         channels();
         startForeground(NOTIF, petNotification());
         brain = new Brain(this);
@@ -1049,6 +1053,12 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
                 state = "connected";
                 text = (ok ? "Last run finished: " : "Last run stopped early: ") + text;
                 break;
+            case "stopped":
+                history.add("grok_stopped", null, null, null, text, null);
+                grokLast = Util.obj("t", now, "ok", false, "msg", text);
+                state = "connected";
+                text = "Last run stopped: " + text;
+                break;
             default:
                 return false;
         }
@@ -1056,6 +1066,24 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         grokMsg = text;
         grokSince = now;
         return true;
+    }
+
+    /** The Mac's watcher answered a request from the Den's Grok Build page. */
+    void macAnswered(JSONObject r, JSONObject result) {
+        String action = r.optString("action");
+        boolean ok = !"failed".equals(r.optString("state"));
+        if ("diagnostics".equals(action)) {
+            diag.macDone(r.optString("id"), result);
+        } else if (!"status".equals(action)) {
+            history.add("mac_control", null, null, ok, Mac.label(action, r.optString("arg")) + ": " + r.optString("msg"), null);
+        }
+        if ("watch-stop".equals(action) && ok) mac.watcherStopped();
+    }
+
+    JSONObject macForDen() {
+        JSONObject o = mac.forDen();
+        Util.put(o, "diag", diag.snapshot());
+        return o;
     }
 
     // ---- status ----

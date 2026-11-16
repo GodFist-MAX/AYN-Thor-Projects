@@ -23,6 +23,11 @@ updates to auto), it starts a headless Grok Build run that fixes them and ships 
 coro install (which publishes them), once no Grok Build session has been in use for 10 minutes and no
 game or video is in front. The run's report goes back to the Thor, to a Mac notification and to the
 next Grok Build session.
+
+The Den's Grok Build page: buttons on the Thor for coro autofix status/hold/on/off/stop, coro watch
+--stop and diagnostics. adb only goes from the Mac to the Thor, so Coronamon keeps the requests and
+bumps /sdcard/Coronamon/control.rev; while the Thor is plugged in, the watcher checks that file every
+3 seconds, does what was asked and answers over the bridge with the result and a fresh status.
 """
 import fcntl
 import filecmp
@@ -35,6 +40,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -1144,6 +1150,7 @@ def watch_loop(wait=False):
     signal.signal(signal.SIGTERM, lambda *a: (wlog("stopped"), os._exit(0)))
     code = (os.path.getmtime(__file__), os.path.getmtime(CORO))
     wlog("watching for the Thor (pid %d)" % os.getpid())
+    threading.Thread(target=control_loop, name="control", daemon=True).start()
     connected, last_rev, last_check, last_sync, last_tick = False, None, 0.0, 0.0, 0.0
     while True:
         try:
@@ -1156,6 +1163,7 @@ def watch_loop(wait=False):
                     connected, fresh = True, True
                     wlog("Thor plugged in")
                     time.sleep(3)
+                    _watch["connected"] = True
                     reason = "plugged in"
                 elif time.time() - last_check > 30:
                     last_check = time.time()
@@ -1175,9 +1183,11 @@ def watch_loop(wait=False):
                         grok_tick(fresh)
                     except Exception as e:
                         wlog("grok check failed: %s" % e)
+                    push_mac_status(force=fresh)
             else:
                 if connected:
                     connected = False
+                    _watch["connected"], _watch["pushed"] = False, None
                     wlog("Thor unplugged")
                 if time.time() - last_tick > 60:
                     last_tick = time.time()
@@ -1248,7 +1258,7 @@ AUTOFIX_DENY = ["Read(**/keys/**)", "Read(**/*.pass)", "Read(**/*.jks)", "Read(*
                 "Bash(*git push -f*)", "Bash(*pm uninstall*)", "Bash(*adb*uninstall*)", "Bash(*pm clear*)", "Bash(sudo *)"]
 STOPPED = {"offline": "Paused because the Mac went offline; it picks up again once the internet is back.",
            "timeout": "Stopped after running out of time.", "stopped": "Stopped from the Mac.",
-           "lost": "The run stopped unexpectedly."}
+           "stopped-thor": "Stopped from the Thor.", "lost": "The run stopped unexpectedly."}
 
 AUTOFIX_PROMPT = """\
 Coronamon started this Grok Build run by itself: the AYN Thor was plugged into the Mac while Grok Build was open, and \
@@ -1490,6 +1500,14 @@ def tell_thor_grok(state, msg, detail=None, ok=True):
         return False
 
 
+def tell_thor_run(r):
+    """A finished run, for the Thor. A stop someone asked for isn't trouble, so it isn't reported as trouble
+    (Coronamon builds from before the "stopped" state only take "done")."""
+    if r.get("stopped") in ("stopped", "stopped-thor") and tell_thor_grok("stopped", r["summary"], detail=r["summary"], ok=False):
+        return True
+    return tell_thor_grok("done", r["summary"], detail=r["summary"], ok=r["ok"])
+
+
 def bug_mark(b):
     """What makes a bug new again for a run: a newer version, or coming back after a fix (not repeats)."""
     return "%s|%s|%s" % (b.get("state"), (b.get("versions") or [""])[-1], b.get("reopened") or 0)
@@ -1621,8 +1639,9 @@ def autofix_runner(run):
             break
         except subprocess.TimeoutExpired:
             pass
-        if (af_state().get("current") or {}).get("stop"):
-            stopped = "stopped"
+        stop = (af_state().get("current") or {}).get("stop")
+        if stop:
+            stopped = "stopped-thor" if stop == "thor" else "stopped"
         elif time.time() > deadline:
             stopped = "timeout"
         elif time.time() - net_at > 60:
@@ -1658,7 +1677,7 @@ def finish_run(run, code, stopped=None):
         elif not summary:
             summary = "The run ended without a report (exit %s)." % code
         results = {x.get("key"): x for x in rep.get("items") or [] if isinstance(x, dict)}
-        if not cur.get("test") and stopped not in ("offline", "stopped", "lost"):
+        if not cur.get("test") and stopped not in ("offline", "stopped", "stopped-thor", "lost"):
             for i in items:
                 st["handled"][i["key"]] = i["mark"]
         rec = {"id": run, "session": res.get("sessionId") or cur["session"], "started": cur["started"],
@@ -1668,13 +1687,15 @@ def finish_run(run, code, stopped=None):
                           "note": one_line((results.get(i["key"]) or {}).get("note"), 300)} for i in items]}
         st["runs"] = (st["runs"] + [rec])[-40:]
         st["current"] = None
-    if tell_thor_grok("done", summary, detail=summary, ok=ok):
+    if tell_thor_run(rec):
         with AfState() as st:
             for r in st["runs"]:
                 if r["id"] == run:
                     r["toldThor"] = True
+        push_mac_status(force=True)
     notify_mac("Grok Build %s: %s" % ("finished" if ok else "stopped", summary))
-    wlog("autofix %s %s: %s" % (run, "done" if ok else (stopped or "failed (exit %s)" % code), summary))
+    how = "done" if ok else {"stopped-thor": "stopped"}.get(stopped, stopped) or "failed (exit %s)" % code
+    wlog("autofix %s %s: %s" % (run, how, summary))
     touch_news()
 
 
@@ -1699,7 +1720,7 @@ def grok_tick(fresh=False):
     st = af_state()
     cur = st.get("current")
     for r in st["runs"]:
-        if r.get("toldThor") is False and tell_thor_grok("done", r["summary"], detail=r["summary"], ok=r["ok"]):
+        if r.get("toldThor") is False and tell_thor_run(r):
             with AfState() as s:
                 for x in s["runs"]:
                     if x["id"] == r["id"]:
@@ -1747,6 +1768,322 @@ def grok_tick(fresh=False):
         start_run(items, "plugged in" if fresh else "new on the Thor")
     except C.CoroError as e:
         wlog("autofix: %s" % e)
+
+
+# ---- the Den's Grok Build page: buttons on the Thor for the commands above ----
+
+CONTROL_REV = "/sdcard/Coronamon/control.rev"
+CONTROL_NAMES = {"status": "check status", "hold": "pause runs", "resume": "resume runs", "off": "turn runs off",
+                 "on": "turn runs on", "stop-run": "stop the current run", "watch-stop": "stop the watcher",
+                 "diagnostics": "run diagnostics"}
+_watch = {"connected": False, "pushed": None, "pushedAt": 0.0, "pushError": None}
+
+
+def control_loop():
+    """The Thor can't reach the Mac, so the Den's buttons leave requests with Coronamon and bump control.rev.
+    While the Thor is plugged in, this checks that file every 3 seconds and answers what's waiting."""
+    last = None
+    while True:
+        time.sleep(3)
+        if not _watch["connected"]:
+            last = None
+            continue
+        try:
+            rev = C.sh("cat %s 2>/dev/null" % CONTROL_REV, timeout=15).strip()
+            if rev and rev != last:
+                handle_controls()
+                last = rev
+        except Exception as e:
+            wlog("requests from the Thor failed: %s" % e)
+            time.sleep(30)
+
+
+def handle_controls():
+    reqs = C.need(C.bridge("control", "take", retries=3)).get("requests") or []
+    stop = False
+    for r in reqs:
+        action = r.get("action") or ""
+        try:
+            res = run_control(action, r.get("arg"))
+        except Exception as e:
+            res = {"ok": False, "msg": "That didn't work on the Mac: %s" % one_line(str(e), 200)}
+        try:
+            res.setdefault("status", mac_status(fresh=action == "status"))
+        except Exception as e:
+            wlog("status for the Thor failed: %s" % e)
+        C.need(C.bridge("control-done", r.get("id"), retries=3, result=res))
+        if res.get("status"):
+            _watch["pushed"], _watch["pushedAt"] = status_key(res["status"]), time.time()
+        if action != "status":
+            wlog("from the Thor, %s: %s" % (CONTROL_NAMES.get(action, action), res.get("msg")))
+        stop = stop or (action == "watch-stop" and res.get("ok"))
+    if stop:
+        stop_watching()
+
+
+def run_control(action, arg=None):
+    """One request from the Den: {ok, msg}, plus checks for diagnostics."""
+    if action == "status":
+        return {"ok": True, "msg": "Up to date."}
+    if action in ("hold", "resume"):
+        minutes = 0
+        if action == "hold":
+            try:
+                minutes = max(1, min(24 * 60, int(float(arg or 60))))
+            except ValueError:
+                minutes = 60
+        until = now_ms() + minutes * 60_000 if minutes else 0
+        with AfState() as st:
+            st["holdUntil"] = until
+            going = bool(st.get("current"))
+        if not until:
+            return {"ok": True, "msg": "Automatic runs can start again."}
+        return {"ok": True, "msg": "Automatic runs are paused for %s.%s" % (
+            "1 hour" if minutes == 60 else plural(minutes, "minute"), " The run going now keeps going." if going else "")}
+    if action in ("on", "off"):
+        s = load(SETTINGS, {})
+        s["autofix"] = action == "on"
+        save(SETTINGS, s)
+        going = action == "off" and bool(af_state().get("current"))
+        return {"ok": True, "msg": "Automatic runs are %s.%s" % (action, " The run going now keeps going." if going else "")}
+    if action == "stop-run":
+        with AfState() as st:
+            cur = st.get("current")
+            if cur:
+                cur["stop"] = "thor"
+        return {"ok": True, "msg": "Asked the run to stop. It saves its work and reports back within a minute or two."
+                if cur else "No run was going."}
+    if action == "watch-stop":
+        return {"ok": True, "msg": "The watcher stopped. It starts again when you log in to the Mac, or run coro watch there."}
+    if action == "diagnostics":
+        checks = mac_diagnostics()
+        look = [c["name"] for c in checks if c["state"] in ("warn", "bad")]
+        return {"ok": True, "checks": checks, "msg": "%s to look at: %s." % (plural(len(look), "thing"), ", ".join(look))
+                if look else "Everything on the Mac looks good."}
+    return {"ok": False, "msg": "The Mac doesn't know how to do that (%s)." % action}
+
+
+def stop_watching():
+    """coro watch --stop from inside the watcher, when the Thor asks."""
+    wlog("stopping (asked from the Thor)")
+    if launch_agent_loaded():
+        launchctl("bootout", "gui/%d/%s" % (os.getuid(), LAUNCH_LABEL))
+        time.sleep(10)
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def agent_state():
+    if launch_agent_loaded():
+        return "loaded"
+    return "installed" if os.path.exists(LAUNCH_AGENT) else "none"
+
+
+def proc_started(pid):
+    try:
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10,
+                             env=dict(os.environ, LC_ALL="C")).stdout.strip()
+        return int(time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y")) * 1000)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return 0
+
+
+def watch_log_tail(n):
+    try:
+        return [line.rstrip("\n") for line in open(WATCH_LOG, errors="replace").readlines()[-n:]]
+    except OSError:
+        return []
+
+
+def mac_status(fresh=False):
+    """What the Den's Grok Build page shows: coro autofix status and coro watch --status, as data."""
+    T = _tick
+    g = T["grok"] if T["grok"] and not fresh else grok_status()
+    st = af_state()
+    cur, hold = st.get("current"), st.get("holdUntil") or 0
+    items = new_items(st, pending_items(config(), load(INDEX, {"bugs": {}}), T["apps"], T["auto"]))
+    real = [r for r in st["runs"] if not r.get("test")]
+    pid = watcher_pid()
+    return {
+        "t": now_ms(),
+        "watcher": {"pid": pid or 0, "since": proc_started(pid) if pid else 0, "agent": agent_state()},
+        "grok": {"ok": g["ok"], "sessions": g["sessions"], "signedIn": g["signedIn"], "why": g["why"],
+                 "busy": len(busy_sessions())},
+        "autofix": {
+            "on": bool(af_setting("autofix", True)), "perDay": af_setting("autofixPerDay", 6),
+            "minutes": af_setting("autofixMinutes", 120), "holdUntil": hold if hold > now_ms() else 0,
+            "waiting": None if cur else st.get("waiting"),
+            "current": {"id": cur["id"], "started": cur["started"], "test": bool(cur.get("test")),
+                        "what": "a test" if cur.get("test") else items_short(cur.get("items") or [], 8),
+                        "stopping": bool(cur.get("stop"))} if cur else None,
+            "today": len([r for r in real if now_ms() - (r.get("started") or 0) < 86400_000]),
+            "next": [item_short(i) for i in items[:8]], "nextMore": max(0, len(items) - 8),
+            "runs": [{"started": r.get("started"), "ended": r.get("ended"), "test": bool(r.get("test")),
+                      "ok": bool(r.get("ok")), "stopped": r.get("stopped"), "summary": one_line(r.get("summary"), 300)}
+                     for r in st["runs"][-5:][::-1]],
+        },
+        "log": watch_log_tail(8),
+    }
+
+
+def status_key(s):
+    return json.dumps({k: v for k, v in s.items() if k not in ("t", "log")}, sort_keys=True)
+
+
+def push_mac_status(force=False):
+    """Keeps the Den's Grok Build page current: whenever something changes, and every 2 minutes so it can tell
+    the watcher is there."""
+    try:
+        s = mac_status()
+        key = status_key(s)
+        if not force and key == _watch["pushed"] and time.time() - _watch["pushedAt"] < 120:
+            return
+        C.need(C.bridge("mac-status", retries=3, status=s))
+        _watch["pushed"], _watch["pushedAt"], _watch["pushError"] = key, time.time(), None
+    except Exception as e:
+        if str(e) != _watch["pushError"]:
+            wlog("status for the Thor failed: %s" % e)
+        _watch["pushError"] = str(e)
+
+
+def finding(name, state, detail, fix=None):
+    """One diagnostics line; state is good, warn, bad or info."""
+    return {"name": name, "state": state, "detail": detail, "fix": fix}
+
+
+def watch_errors(hours=24):
+    """Lines in the watcher's log from the last day that say something went wrong."""
+    try:
+        lines = open(WATCH_LOG, errors="replace").readlines()
+    except OSError:
+        return []
+    now, year, out = time.time(), time.localtime().tm_year, []
+    for line in lines:
+        try:
+            t = time.mktime(time.strptime("%d-%s" % (year, line[:14]), "%Y-%m-%d %H:%M:%S"))
+        except ValueError:
+            continue
+        if now - hours * 3600 <= t <= now + 60 and re.search(r"\berror\b|failed|didn't answer", line, re.I):
+            out.append(line.rstrip("\n"))
+    return out
+
+
+def adb_state():
+    """The Thor's line in adb devices: device, unauthorized, offline, or None when it isn't there."""
+    try:
+        lines = subprocess.run([C.ADB, "devices"], capture_output=True, text=True, timeout=15).stdout.splitlines()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return next((line.split()[1] for line in lines if line.startswith(C.SERIAL + "\t")), None)
+
+
+def mac_diagnostics():
+    """The Mac's half of the Den's Run diagnostics button, and of coro diagnostics."""
+    out = []
+    pid, agent = watcher_pid(), agent_state()
+    if not pid:
+        out.append(finding("Watcher", "bad", "Not running, so nothing happens when the Thor is plugged in.",
+                           "On the Mac, run coro watch --install."))
+    elif agent != "loaded":
+        out.append(finding("Watcher", "warn", "Running, but not from the login agent, so it won't come back if it stops.",
+                           "On the Mac, run coro watch --install."))
+    else:
+        since = proc_started(pid)
+        out.append(finding("Watcher", "good", "Running%s, and it starts at login." % (" since " + when(since) if since else "")))
+
+    state = adb_state() if os.path.exists(C.ADB) else "no adb"
+    if state == "device":
+        t0 = time.time()
+        try:
+            v = C.need(C.bridge("ping", retries=2)).get("version")
+            out.append(finding("Link to the Thor", "good", "Plugged in over USB; Coronamon %s answers in %.1f s." % (v, time.time() - t0)))
+        except Exception as e:
+            out.append(finding("Link to the Thor", "bad", "Plugged in, but Coronamon didn't answer: %s" % one_line(str(e), 120),
+                               "Open Coronamon on the Thor, or run coro setup on the Mac."))
+    elif state == "unauthorized":
+        out.append(finding("Link to the Thor", "bad", "Plugged in, but the Thor hasn't allowed this Mac yet.",
+                           "Unlock the Thor and allow USB debugging for this Mac."))
+    elif state == "no adb":
+        out.append(finding("Link to the Thor", "bad", "adb is missing (%s)." % C.ADB.replace(HOME, "~"),
+                           "Unpack Android platform-tools into ~/platform-tools."))
+    elif state:
+        out.append(finding("Link to the Thor", "warn", "adb sees the Thor as %s." % state, "Unplug the Thor and plug it in again."))
+    else:
+        out.append(finding("Link to the Thor", "info", "Not plugged in."))
+
+    net = online()
+    if not os.path.exists(GROK):
+        out.append(finding("Grok Build", "bad", "Not installed (%s)." % GROK.replace(HOME, "~"), "Install Grok Build on the Mac."))
+    else:
+        try:
+            ver = subprocess.run([GROK, "--version"], capture_output=True, text=True, timeout=20).stdout.split("(")[0].strip()
+        except (OSError, subprocess.TimeoutExpired):
+            ver = ""
+        ver = ver or "Grok Build"
+        g = grok_status()
+        if g["ok"]:
+            out.append(finding("Grok Build", "good", "%s: %s open, signed in and online." % (ver, plural(g["sessions"], "session"))))
+        else:
+            fix = {"Grok Build isn't open on the Mac": "Open Grok Build on the Mac.",
+                   "Grok Build isn't signed in": "Sign in to Grok Build on the Mac.",
+                   "the Mac is offline": "Check the Mac's Wi-Fi."}.get(g["why"])
+            out.append(finding("Grok Build", "warn", "%s: %s, so automatic runs wait." % (ver, g["why"]), fix))
+    out.append(finding("Internet", "good", "xAI and GitHub both answer.") if net else
+               finding("Internet", "bad", "xAI or GitHub didn't answer, so runs and publishing wait.", "Check the Mac's Wi-Fi."))
+
+    st = af_state()
+    cur, hold = st.get("current"), st.get("holdUntil") or 0
+    real = [r for r in st["runs"] if not r.get("test")]
+    last = real[-1] if real else None
+    if cur:
+        if not pid_alive(cur.get("pid")) and now_ms() - cur["started"] > 120_000:
+            out.append(finding("Automatic runs", "bad", "Run %s is marked as going, but its process is gone." % cur["id"],
+                               "The watcher cleans it up within a minute; if it doesn't, run coro autofix status on the Mac."))
+        else:
+            out.append(finding("Automatic runs", "info", "Running now, since %s: %s." % (
+                hm(cur["started"]), "a test" if cur.get("test") else items_short(cur.get("items") or [], 4))))
+    elif not af_setting("autofix", True):
+        out.append(finding("Automatic runs", "warn", "Off, so new bugs wait for you.", "Turn runs on (Grok Build page), or coro autofix on."))
+    elif hold > now_ms():
+        out.append(finding("Automatic runs", "info", "Paused until %s." % hm(hold)))
+    elif last and not last.get("ok") and last.get("stopped") not in ("stopped", "stopped-thor", "offline"):
+        out.append(finding("Automatic runs", "warn", "On, but the last run didn't finish: %s" % one_line(last.get("summary"), 160),
+                           "coro autofix log on the Mac shows what happened."))
+    else:
+        today = len([r for r in real if now_ms() - (r.get("started") or 0) < 86400_000])
+        out.append(finding("Automatic runs", "good", "On; %d of %d runs used in the last day%s." % (
+            today, af_setting("autofixPerDay", 6), ". Waiting: " + st["waiting"] if st.get("waiting") else "")))
+
+    cfg = config()
+    if not github_on():
+        out.append(finding("GitHub", "info", "Publishing is off: bugs still go to Grok, nothing is posted.", "coro github on"))
+    elif not os.path.exists(GH):
+        out.append(finding("GitHub", "bad", "gh is missing (%s), so updates can't be published." % GH.replace(HOME, "~")))
+    elif not net:
+        out.append(finding("GitHub", "info", "Can't check while the Mac is offline."))
+    else:
+        try:
+            signed = subprocess.run([GH, "auth", "status"], capture_output=True, text=True, timeout=30).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            signed = False
+        R = repo_dir(cfg)
+        waiting = unpushed(R) if os.path.isdir(R) else 0
+        if not signed:
+            out.append(finding("GitHub", "bad", "gh isn't signed in, so updates can't be published.", "On the Mac, run gh auth login."))
+        elif waiting:
+            out.append(finding("GitHub", "warn", "%s waiting to push." % plural(waiting, "commit"), "coro github push"))
+        else:
+            out.append(finding("GitHub", "good", "Signed in, and everything is pushed to %s." % cfg["slug"]))
+
+    errors = watch_errors()
+    if errors:
+        out.append(finding("Watcher log", "warn", "%s in the last day. Latest: %s" % (plural(len(errors), "problem"), one_line(errors[-1], 160)),
+                           "coro watch --status on the Mac shows the log."))
+    else:
+        out.append(finding("Watcher log", "good", "No problems in the last day."))
+    gb = shutil.disk_usage(HOME).free / 1e9
+    out.append(finding("Mac storage", "bad" if gb < 5 else "warn" if gb < 15 else "good", "%.0f GB free." % gb,
+                       "Free up space on the Mac; builds need a few GB." if gb < 15 else None))
+    return out
 
 
 # ---- Grok Build hooks ----
@@ -2042,7 +2379,7 @@ def cmd_watch(args):
             print("The login agent wasn't installed.")
     elif C.flag(args, "--status"):
         pid = watcher_pid()
-        agent = "loaded" if launch_agent_loaded() else ("installed, not loaded" if os.path.exists(LAUNCH_AGENT) else "not installed")
+        agent = {"loaded": "loaded", "installed": "installed, not loaded", "none": "not installed"}[agent_state()]
         print("Watcher: %s; login agent %s" % ("running (pid %d)" % pid if pid else "not running", agent))
         try:
             print("".join(open(WATCH_LOG).readlines()[-8:]).rstrip())
@@ -2223,10 +2560,31 @@ def autofix_status():
     if st["runs"]:
         out.append("Last runs:")
         for r in st["runs"][-5:][::-1]:
-            out.append("  %s %s%s: %s" % (when(r["started"]), "test " if r.get("test") else "",
-                                          "finished" if r.get("ok") else (r.get("stopped") or "failed"), r["summary"]))
+            how = "finished" if r.get("ok") else (r.get("stopped") or "failed").replace("stopped-thor", "stopped from the Thor")
+            out.append("  %s %s%s: %s" % (when(r["started"]), "test " if r.get("test") else "", how, r["summary"]))
     return "\n".join(out)
 
 
+def cmd_diagnostics(args):
+    marks = {"good": "ok", "warn": "!!", "bad": "XX", "info": "--"}
+
+    def show(title, checks):
+        print(title)
+        for c in checks:
+            print("  %s %-18s %s" % (marks.get(c.get("state"), "  "), c.get("name"), c.get("detail")))
+            if c.get("fix"):
+                print("     %-18s fix: %s" % ("", c["fix"]))
+
+    show("Mac", mac_diagnostics())
+    if not thor_ready():
+        print("Thor\n  -- not plugged in")
+        return
+    try:
+        show("Thor", C.need(C.bridge("diagnostics", retries=3))["checks"])
+    except Exception as e:
+        print("Thor\n  XX Coronamon didn't run its checks: %s" % e)
+
+
 COMMANDS = {"sync": cmd_sync, "bugs": cmd_bugs, "bug": cmd_bug, "bug-report": cmd_bug_report, "publish": cmd_publish,
-            "github": cmd_github, "watch": cmd_watch, "grok-hook": cmd_grok_hook, "autofix": cmd_autofix}
+            "github": cmd_github, "watch": cmd_watch, "grok-hook": cmd_grok_hook, "autofix": cmd_autofix,
+            "diagnostics": cmd_diagnostics}

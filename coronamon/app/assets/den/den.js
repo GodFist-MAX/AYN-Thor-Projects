@@ -2,12 +2,13 @@
   'use strict';
 
   const C = window.Coro;
-  const TABS = ['apps', 'activity', 'bugs', 'inbox', 'settings', 'about'];
-  const TITLES = { apps: 'Apps', activity: 'Activity', bugs: 'Bugs', inbox: 'Inbox', settings: 'Settings', about: 'About' };
+  const TABS = ['apps', 'activity', 'bugs', 'grok', 'inbox', 'settings', 'about'];
+  const TITLES = { apps: 'Apps', activity: 'Activity', bugs: 'Bugs', grok: 'Grok Build', inbox: 'Inbox', settings: 'Settings', about: 'About' };
   const QUIPS = {
     apps: 'Everything Grok Build made for the Thor. I keep an eye on all of it!',
     activity: "Builds, installs, crashes... I remember all of it.",
     bugs: "Anything that breaks goes to Grok next time we're plugged into the Mac.",
+    grok: 'I can ask the Mac to check on Grok Build, pause it or stop it.',
     inbox: 'Drop APKs in Coronamon/inbox (or Download) and I can install them.',
     settings: 'How I hang out on your Thor.',
     about: "That's me! Coronamon, the little sun.",
@@ -123,6 +124,8 @@
     bug_fixed: ['Bug fixed', 'good'], published: ['Put on GitHub', 'good'],
     grok_connected: ['Grok Build connected', 'good'], grok_away: ['Grok Build not ready', 'warn'],
     grok_fixing: ['Grok Build is fixing', 'info'], grok_done: ['Grok Build finished', 'good', 'Grok Build stopped early'],
+    grok_stopped: ['Grok Build stopped', 'info'],
+    mac_control: ['Asked the Mac', 'info', "The Mac couldn't do it"], diagnostics: ['Diagnostics', 'info', 'Diagnostics found problems'],
   };
 
   const GROK = { connected: ['Connected on the Mac', 'good'], away: ['Not ready on the Mac', 'warn'], fixing: ['Fixing things now', 'info'] };
@@ -317,6 +320,185 @@
     show('bugs');
   }
 
+  // ---- the Mac: Grok Build's status, and buttons that run coro there ----
+
+  const MACDO = {
+    status: 'Check status', hold: 'Pause runs 1 hour', resume: 'Resume runs', off: 'Turn runs off', on: 'Turn runs on',
+    'stop-run': 'Stop current run', 'watch-stop': 'Stop watcher', diagnostics: 'Mac diagnostics',
+  };
+  const REQ = {
+    waiting: ['Waiting for the Mac...', 'info'], working: ['The Mac is on it...', 'info'], done: [null, 'good'],
+    failed: [null, 'bad'], expired: [null, 'warn'],
+  };
+  const MACNOTE = {
+    waiting: 'Waiting for the Mac to pick this up...', working: 'The Mac is checking...',
+    skipped: 'Not plugged into the Mac, so only the Thor was checked.',
+  };
+  let grokBusy = false, grokPoll = 0, diagScroll = false, confirmKey = null;
+
+  function plural(n, word) {
+    return n + ' ' + word + (n === 1 ? '' : 's');
+  }
+
+  function clock(ms) {
+    return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function reachable(m) {
+    const u = m.usb || {};
+    return !u.known || (u.connected && u.adb);
+  }
+
+  function pendingReq(r) {
+    return r.state === 'waiting' || r.state === 'working';
+  }
+
+  function askMac(action, arg) {
+    const r = safe(() => call('control', action, arg == null ? '' : String(arg)));
+    if (r) toast(Date.now() - r.t < 2000 ? 'Asking the Mac...' : 'Already asked. Waiting for the Mac...');
+    render();
+  }
+
+  /** Asks the Mac how things are when the page opens, unless it said so in the last 30 seconds. */
+  function freshen() {
+    const m = safe(() => call('mac'));
+    if (!m || !reachable(m) || (m.statusAt && Date.now() - m.statusAt < 30e3)) return;
+    if ((m.requests || []).some((r) => r.action === 'status' && pendingReq(r))) return;
+    safe(() => call('control', 'status', 'auto'));
+  }
+
+  function confirmThen(title, text, yes, fn) {
+    const box = document.getElementById('confirm');
+    document.getElementById('confirm-title').textContent = title;
+    document.getElementById('confirm-text').textContent = text;
+    const ok = document.getElementById('confirm-yes');
+    ok.textContent = yes;
+    ok.onclick = () => { closeConfirm(); fn(); };
+    confirmKey = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.k : null;
+    box.hidden = false;
+    document.getElementById('confirm-no').focus();
+  }
+
+  function closeConfirm() {
+    document.getElementById('confirm').hidden = true;
+    refocus(confirmKey);
+  }
+
+  function refocus(key) {
+    const view = document.getElementById('view');
+    const again = view.querySelector('[data-k="' + key + '"]:not([disabled])') || view.querySelector('.buttons button:not([disabled])');
+    if (again) again.focus();
+  }
+
+  function runDiagnostics() {
+    if (((safe(() => call('mac')) || {}).diag || {}).running) {
+      toast('Still checking...');
+      return;
+    }
+    const d = safe(() => call('diagnostics'));
+    if (!d) return;
+    toast(d.macState === 'skipped' ? 'Checking the Thor. Plug into the Mac to check it too.' : 'Checking the Thor and asking the Mac...');
+    diagScroll = true;
+    render();
+  }
+
+  function linkLine(m, pending) {
+    const u = m.usb || {};
+    const heard = m.statusAt ? ago(m.statusAt) : '';
+    if (u.known && !u.connected) return ['', 'Not plugged into the Mac' + (heard ? '  ·  last heard ' + heard : '')];
+    if (u.known && !u.adb) return ['warn', "Plugged in, but USB debugging is off, so the Mac can't reach me"];
+    if (m.status && Date.now() - m.statusAt < 4 * 60e3) return ['good', 'Connected to the Mac  ·  updated ' + heard];
+    if (pending) return ['info', 'Waiting for the Mac to answer...'];
+    return ['warn', "Plugged in, but the Mac's watcher hasn't answered" + (heard ? ' since ' + when(m.statusAt) : ' yet')];
+  }
+
+  function statusPanel(st) {
+    const g = st.grok || {}, af = st.autofix || {}, w = st.watcher || {};
+    const rows = [['Grok Build', g.ok ? plural(g.sessions, 'session') + ' open, signed in, online' : g.why || 'Unknown', g.ok ? 'good' : 'warn']];
+    if (g.busy) rows.push(['In use', plural(g.busy, 'session') + ' active in the last 10 minutes, so runs wait', 'info']);
+    const runs = !af.on ? ['Off', 'warn'] : af.holdUntil ? ['Paused until ' + clock(af.holdUntil), 'info'] : ['On', 'good'];
+    rows.push(['Automatic runs', runs[0] + '  ·  ' + af.today + ' of ' + af.perDay + ' in the last day', runs[1]]);
+    if (af.current) {
+      rows.push(['Running now', af.current.what + ', since ' + clock(af.current.started) + (af.current.stopping ? '  ·  stopping...' : ''), 'info']);
+    } else if (af.waiting) {
+      rows.push(['Waiting', af.waiting, 'info']);
+    }
+    const next = af.next || [];
+    rows.push(['Next run', next.length ? next.join(', ') + (af.nextMore ? ' and ' + af.nextMore + ' more' : '') : 'Nothing new to fix', '']);
+    const last = (af.runs || [])[0];
+    if (last) rows.push(['Last run', when(last.started) + (last.test ? '  ·  test' : '') + '  ·  ' + last.summary, last.ok ? 'good' : last.stopped ? 'warn' : 'bad']);
+    if (w.pid) {
+      rows.push(['Watcher', 'Running' + (w.since ? ' since ' + when(w.since) : '') + (w.agent === 'loaded' ? ', starts at login' : ", won't restart by itself"),
+        w.agent === 'loaded' ? 'good' : 'warn']);
+    } else {
+      rows.push(['Watcher', (w.stopped ? 'Stopped from here ' + ago(w.stopped) + '.' : 'Not running.') +
+        ' It starts again when you log in to the Mac, or run coro watch there.', 'bad']);
+    }
+    return el('div', { class: 'panel' }, rows.map(([k, v, cls]) => el('div', { class: 'kv' },
+      el('div', { class: 'k' }, el('span', { class: 'dot ' + cls }), k), el('div', { class: 'v' }, v))));
+  }
+
+  function requestList(reqs) {
+    const recent = reqs.filter((r) => !(r.action === 'status' && r.arg === 'auto') && Date.now() - r.t < 5 * 60e3).slice(0, 4);
+    if (!recent.length) return null;
+    return el('div', { class: 'reqs' }, recent.map((r) => {
+      const [text, cls] = REQ[r.state] || ['', ''];
+      return el('div', { class: 'req' }, el('span', { class: 'dot ' + cls }), el('b', {}, MACDO[r.action] || r.action),
+        '  ' + (text || r.msg || ''), el('span', { class: 'ago' }, ago(r.t)));
+    }));
+  }
+
+  function checkRows(list) {
+    return list.map((c) => el('div', { class: 'check' }, el('span', { class: 'dot ' + (c.state || '') }),
+      el('div', { class: 'what' }, el('b', {}, c.name), '  ' + (c.detail || ''), c.fix ? el('div', { class: 'fix' }, c.fix) : null)));
+  }
+
+  function diagView(d) {
+    const look = (d.thor || []).concat(d.mac || []).filter((c) => c.state === 'warn' || c.state === 'bad');
+    const busy = d.running || d.macState === 'waiting' || d.macState === 'working';
+    const head = busy ? 'checking...' : look.length ? plural(look.length, 'thing') + ' to look at' : 'everything looks good';
+    return el('div', { class: 'diag' },
+      el('h3', {}, 'Diagnostics  ·  ' + when(d.started) + '  ·  ' + head),
+      el('div', { class: 'diaghead' }, 'On the Thor'),
+      d.thor ? checkRows(d.thor) : el('div', { class: 'note' }, 'Checking...'),
+      el('div', { class: 'diaghead' }, 'On the Mac'),
+      d.mac ? checkRows(d.mac) : el('div', { class: 'note' }, MACNOTE[d.macState] || d.macMsg || "The Mac didn't answer."),
+      d.file ? el('div', { class: 'note' }, 'Saved to ' + d.file.replace(/^\/sdcard\//, '')) : null);
+  }
+
+  function grok() {
+    const m = call('mac') || {};
+    const st = m.status, af = st && st.autofix;
+    const reqs = m.requests || [], d = m.diag || {};
+    const pending = reqs.some(pendingReq);
+    const can = reachable(m);
+    grokBusy = pending || d.running || d.macState === 'waiting' || d.macState === 'working';
+    const [dot, text] = linkLine(m, pending);
+    const btn = (k, label, fn, disabled) => el('button', { 'data-k': k, onclick: fn, disabled: !can || disabled }, label);
+    const out = [el('div', { class: 'linkbar' }, el('span', { class: 'dot ' + dot }), text)];
+    if (st) out.push(statusPanel(st));
+    else out.push(el('div', { class: 'note' }, pending ? 'Asking the Mac how things are...' : 'No word from the Mac yet.'));
+    out.push(el('div', { class: 'buttons' },
+      btn('status', 'Check status', () => askMac('status')),
+      af && af.holdUntil ? btn('hold', 'Resume runs', () => askMac('resume')) : btn('hold', 'Pause runs 1 hour', () => askMac('hold', 60)),
+      af && !af.on ? btn('onoff', 'Turn runs on', () => askMac('on')) : btn('onoff', 'Turn runs off', () => askMac('off')),
+      btn('stop-run', 'Stop current run', () => confirmThen('Stop the current run?',
+        "Grok Build stops what it's doing, saves its session and reports back. The same fixes can start again in 10 minutes unless you pause or turn off runs.",
+        'Stop the run', () => askMac('stop-run')), !(af && af.current) || af.current.stopping),
+      btn('watch-stop', 'Stop watcher', () => confirmThen('Stop the watcher on the Mac?',
+        "Nothing on the Mac will check the Thor, sync bugs or start runs, and these buttons stop working, until you log in to the Mac again or run coro watch there. A run that's already going keeps going.",
+        'Stop the watcher', () => askMac('watch-stop')), st && !(st.watcher || {}).pid),
+      el('button', { 'data-k': 'diag', class: 'primary', onclick: runDiagnostics }, 'Run diagnostics')));
+    if (!can) out.push(el('div', { class: 'note' }, 'Plug the Thor into the Mac to use these. Run diagnostics still checks the Thor.'));
+    const list = requestList(reqs);
+    if (list) out.push(list);
+    if (d.started) out.push(diagView(d));
+    if (st && st.log && st.log.length) {
+      out.push(el('div', { class: 'diaghead' }, 'Watcher log, as of ' + when(st.t)), el('pre', { class: 'log' }, st.log.join('\n')));
+    }
+    return out;
+  }
+
   function inbox() {
     const list = call('inbox') || [];
     if (!list.length) return [el('div', { class: 'empty' }, 'No APKs waiting in Coronamon/inbox or Download.')];
@@ -381,11 +563,17 @@
       el('p', { style: 'color:var(--muted)' }, 'Version ' + (st.version || '?') + '. Coronamon and Digimon belong to Bandai Namco; this is a fan-made companion for personal use.'))];
   }
 
-  const VIEWS = { apps, activity, bugs, inbox, settings, about };
+  const VIEWS = { apps, activity, bugs, grok, inbox, settings, about };
+
+  function overlay() {
+    return !document.getElementById('modal').hidden || !document.getElementById('confirm').hidden || !!report;
+  }
 
   function render() {
     const view = document.getElementById('view');
-    const focused = document.activeElement && document.activeElement.textContent;
+    const a = document.activeElement;
+    const focused = a && a.textContent;
+    const key = a && view.contains(a) ? a.dataset.k : null;
     const scroll = view.scrollTop;
     view.replaceChildren();
     try {
@@ -397,24 +585,47 @@
     document.getElementById('title').textContent = TITLES[current];
     document.getElementById('quip').textContent = QUIPS[current];
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.tab === current);
-    if (focused) {
+    if (key) {
+      refocus(key);
+    } else if (focused) {
       const again = [...view.querySelectorAll('button')].find((b) => b.textContent === focused && b.classList.contains('on'));
       if (again) again.focus();
+    }
+    if (diagScroll) {
+      diagScroll = false;
+      const d = view.querySelector('.diag');
+      if (d) d.scrollIntoView({ block: 'start' });
+    }
+    clearTimeout(grokPoll);
+    if (current === 'grok' && grokBusy) {
+      grokPoll = setTimeout(function tick() {
+        if (current !== 'grok') return;
+        if (overlay()) grokPoll = setTimeout(tick, 1000);
+        else render();
+      }, 1000);
     }
   }
 
   function show(tab) {
     current = tab;
     document.getElementById('view').scrollTop = 0;
+    if (tab === 'grok') freshen();
     render();
   }
 
   // ---- gamepad and d-pad focus ----
 
   function focusables() {
-    const modal = document.getElementById('modal'), form = document.getElementById('report');
-    const root = !modal.hidden ? modal : !form.hidden ? form : document;
+    const modal = document.getElementById('modal'), form = document.getElementById('report'), ask = document.getElementById('confirm');
+    const root = !ask.hidden ? ask : !modal.hidden ? modal : !form.hidden ? form : document;
     return [...root.querySelectorAll('button:not([disabled]), textarea')].filter((b) => b.offsetParent !== null);
+  }
+
+  /** What the d-pad scrolls when there's nothing more to focus that way. */
+  function scroller() {
+    if (!document.getElementById('modal').hidden) return document.getElementById('modal-body');
+    if (report) return document.getElementById('report-body');
+    return document.getElementById('view');
   }
 
   function move(dir) {
@@ -441,6 +652,9 @@
     if (best) {
       best.focus();
       best.scrollIntoView({ block: 'nearest' });
+    } else if (dir === 'up' || dir === 'down') {
+      const box = scroller();
+      box.scrollBy({ top: (dir === 'down' ? 0.6 : -0.6) * box.clientHeight });
     }
   }
 
@@ -454,6 +668,7 @@
   });
 
   document.getElementById('modal-close').addEventListener('click', () => { document.getElementById('modal').hidden = true; });
+  document.getElementById('confirm-no').addEventListener('click', closeConfirm);
   document.getElementById('report-cancel').addEventListener('click', () => closeReportForm(true));
   document.getElementById('report-send').addEventListener('click', sendReport);
   for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => show(t.dataset.tab));
@@ -465,7 +680,11 @@
       document.querySelector('.tab.active').focus();
     },
     back() {
-      const modal = document.getElementById('modal');
+      const modal = document.getElementById('modal'), ask = document.getElementById('confirm');
+      if (!ask.hidden) {
+        closeConfirm();
+        return true;
+      }
       if (!modal.hidden) {
         modal.hidden = true;
         return true;
@@ -477,6 +696,7 @@
       return false;
     },
     refresh() {
+      if (current === 'grok') freshen();
       render();
     },
     checkReport() {
@@ -494,5 +714,5 @@
   const first = document.querySelector('.tab.active');
   if (first) first.focus();
   den.checkReport();
-  setInterval(() => { if (document.getElementById('modal').hidden && !report && current !== 'settings') render(); }, 15000);
+  setInterval(() => { if (!overlay() && current !== 'settings') render(); }, 15000);
 })();

@@ -45,7 +45,7 @@ public final class Bridge extends ContentProvider {
         JSONObject res;
         try {
             String a = b64 && arg != null ? decode(arg) : arg;
-            res = onMain(() -> handle(method, a, in, b64));
+            res = "diagnostics".equals(method) ? Diagnostics.forBridge(getContext()) : onMain(() -> handle(method, a, in, b64));
         } catch (Exception e) {
             Throwable c = e.getCause() != null ? e.getCause() : e;
             res = Util.obj("ok", false, "error", c.toString());
@@ -205,10 +205,21 @@ public final class Bridge extends ContentProvider {
             case "grok": {
                 boolean ok = !"false".equals(str(in, "ok", b64));
                 if (!s.grok(nz(arg), nz(str(in, "msg", b64)), str(in, "detail", b64), ok)) {
-                    return Util.obj("ok", false, "error", "grok needs --arg connected, away, fixing or done");
+                    return Util.obj("ok", false, "error", "grok needs --arg connected, away, fixing, done or stopped");
                 }
                 return Util.obj("ok", true);
             }
+            case "control":
+                return Util.obj("ok", true, "requests", s.mac.take());
+            case "control-done": {
+                JSONObject result = Util.parse(str(in, "result", b64));
+                JSONObject r = s.mac.done(nz(arg), result);
+                if (r != null) s.macAnswered(r, result);
+                return Util.obj("ok", true, "found", r != null);
+            }
+            case "mac-status":
+                s.mac.setStatus(Util.parse(str(in, "status", b64)));
+                return Util.obj("ok", true);
             case "update":
                 s.updates.fetch(arg);
                 return Util.obj("ok", true, "started", true);
