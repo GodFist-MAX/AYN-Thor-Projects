@@ -99,10 +99,12 @@ def bridge(method, arg=None, retries=8, **extras):
     command = " ".join(shlex.quote(p) for p in parts)
     last = None
     for attempt in range(retries):
-        out = sh(command)
+        r = adb("shell", command, check=False)
+        out = r.stdout or ""
         i, j = out.find("json="), out.rfind("}]")
         if i < 0 or j < 0:
-            last = out.strip() or "no reply"
+            said = [l.strip() for l in (out + "\n" + (r.stderr or "")).splitlines() if l.strip() and not l.startswith("avc:")]
+            last = " ".join(said)[-300:] or "no reply (adb exit %d)" % r.returncode
         else:
             res = json.loads(out[i + 5:j])
             if res.get("ok") or "waking up" not in str(res.get("error", "")):

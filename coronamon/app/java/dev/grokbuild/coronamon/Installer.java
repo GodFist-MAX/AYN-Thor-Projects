@@ -87,9 +87,12 @@ final class Installer {
         new Thread(() -> {
             try {
                 if (Shell.granted()) {
-                    Shell.Result r = Shell.run("pm install -r -i " + Registry.SELF + " '" + apk.getAbsolutePath().replace("'", "'\\''") + "'", 180_000);
+                    // Given a path, pm has system_server open the file, and it may not read shared
+                    // storage (where downloads are), so the shell hands the APK over on stdin.
+                    String path = apk.getAbsolutePath().replace("'", "'\\''");
+                    Shell.Result r = Shell.run("pm install -r -i " + Registry.SELF + " -S " + apk.length() + " < '" + path + "'", 180_000);
                     boolean ok = r.code == 0 && r.out.contains("Success");
-                    String msg = ok ? "Installed" : (r.err + " " + r.out).trim();
+                    String msg = ok ? "Installed" : reason(r);
                     main.post(() -> done.done(ok, msg));
                     return;
                 }
@@ -99,6 +102,19 @@ final class Installer {
                 main.post(() -> done.done(false, msg));
             }
         }, "install").start();
+    }
+
+    /** Why pm install failed. The Thor prints an "avc:" line before every pm command, which isn't it. */
+    static String reason(Shell.Result r) {
+        String first = null;
+        for (String line : (r.err + "\n" + r.out).split("\n")) {
+            String t = line.trim();
+            if (t.isEmpty() || t.startsWith("avc:")) continue;
+            if (t.startsWith("Failure") || t.startsWith("Error")) return t;
+            if (first == null) first = t;
+        }
+        if (first != null) return first;
+        return r.code == -1 ? "pm install took too long" : "pm install failed (exit " + r.code + ")";
     }
 
     private static void session(Context ctx, File apk, int displayId, Done done) throws IOException {

@@ -1699,7 +1699,8 @@ def finish_run(run, code, stopped=None):
     touch_news()
 
 
-_tick = {"apps": None, "appsAt": 0.0, "auto": False, "grok": None, "grokAt": 0.0, "procs": None}
+_tick = {"apps": None, "appsAt": 0.0, "auto": False, "grok": None, "grokAt": 0.0, "procs": None,
+         "recheckAt": 0.0, "checkFails": 0}
 
 
 def thor_apps(T, apps=None):
@@ -1736,8 +1737,12 @@ def grok_tick(fresh=False):
         if tell_thor_grok("connected" if g["ok"] else "away", msg, detail=msg + "."):
             with AfState() as s:
                 s["thorGrok"] = seen
-    if newly and g["ok"]:
-        thor_apps(T, check_thor_updates())
+    if g["ok"] and (newly or (T["recheckAt"] and time.time() > T["recheckAt"])):
+        apps = check_thor_updates()
+        T["checkFails"] = 0 if apps is not None else (0 if newly else T["checkFails"]) + 1
+        # The Thor can be too busy to answer right after it's plugged in, so a failed check gets a few more tries.
+        T["recheckAt"] = time.time() + 300 if apps is None and T["checkFails"] < 3 else 0.0
+        thor_apps(T, apps)
     elif fresh or time.time() - T["appsAt"] > 600:
         thor_apps(T)
     if cur or not af_setting("autofix", True):
