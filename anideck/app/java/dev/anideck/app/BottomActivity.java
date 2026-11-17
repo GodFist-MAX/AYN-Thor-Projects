@@ -185,7 +185,30 @@ public class BottomActivity extends Activity {
             }
             return App.obj("state", state, "library", library, "net", App.I.net.online(),
                     "settings", App.I.settings(), "version", version(),
-                    "shelf", Shelf.get(BottomActivity.this).json()).toString();
+                    "shelf", Shelf.get(BottomActivity.this).json(),
+                    "downloads", Downloads.get(BottomActivity.this).json()).toString();
+        }
+
+        /** The Downloads tab asks for progress while episodes download. */
+        @JavascriptInterface public String downloads() {
+            return Downloads.get(BottomActivity.this).json().toString();
+        }
+
+        @JavascriptInterface public void playDownload(String id) {
+            if (id != null) topPage(m -> m.playDownload(id));
+        }
+
+        @JavascriptInterface public void closeDownload() {
+            top(MainActivity::closeDownload);
+        }
+
+        /** Cancel on a download that's going, Delete on one that's done. */
+        @JavascriptInterface public void deleteDownload(String id) {
+            if (id != null) h.post(() -> Downloads.get(BottomActivity.this).delete(id));
+        }
+
+        @JavascriptInterface public void retryDownload(String id) {
+            if (id != null) top(m -> m.retryDownload(id));
         }
 
         /** "Save show" on Now Playing. */

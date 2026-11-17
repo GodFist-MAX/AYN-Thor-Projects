@@ -5,13 +5,15 @@ const D = window.Deck;
 const S = {
   tab: 'now', state: {}, lib: { lists: {} }, net: true, settings: {}, media: {}, version: '',
   shelf: { recent: [], saved: [] }, listTab: 'CURRENT', range: 0, rate: 1, dragging: false, expectNav: false,
+  // Downloads: the list from Downloads.java, download speeds by id, the subtitle sheet, a Delete waiting for its second press.
+  dls: { items: [] }, speed: {}, dlAt: 0, subSheet: false, confirmDl: '',
 };
 const RATES = [1, 1.25, 1.5, 2, 0.75];
-const TITLES = { now: 'Now Playing', next: 'Up Next', schedule: 'Schedule', lists: 'Lists', browse: 'Browse', settings: 'Settings' };
+const TITLES = { now: 'Now Playing', next: 'Up Next', schedule: 'Schedule', lists: 'Lists', browse: 'Browse', downloads: 'Downloads', settings: 'Settings' };
 const LIST_NAMES = { CURRENT: 'Watching', REPEATING: 'Rewatching', COMPLETED: 'Completed', PAUSED: 'Paused', PLANNING: 'Planning', DROPPED: 'Dropped' };
 const STATUS_NAMES = { RELEASING: 'Airing', FINISHED: 'Finished', NOT_YET_RELEASED: 'Upcoming', HIATUS: 'On hiatus', CANCELLED: 'Cancelled' };
-// Tags on the site's server choices; "dl" (downloadable) is left out because downloads are off.
-const SERVER_TAGS = { 's-sub': 'Soft subs', 'h-sub': 'Hard subs', embed: 'Embedded player', dl: '' };
+// Tags on the site's server choices.
+const SERVER_TAGS = { 's-sub': 'Soft subs', 'h-sub': 'Hard subs', embed: 'Embedded player', dl: 'Downloads' };
 const I = {
   play: '<svg viewBox="0 0 24 24"><path class="fill" d="M8 5.5v13l10.5-6.5z"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><path class="fill" d="M7 5h3.6v14H7zM13.4 5H17v14h-3.6z"/></svg>',
@@ -109,6 +111,7 @@ window.deck = {
     S.media[m.id] = m;
     if (S.tab === 'now') render();
   },
+  onDownloads: (j) => dlUpdate(j),
   onBack() {
     if (S.tab === 'now') return;
     S.tab = 'now';
@@ -133,7 +136,7 @@ window.deck = {
 const shape = (s) => {
   const p = s.player;
   return [s.page, s.path, s.ep, s.anilistId, s.show, s.epTitle, s.epCount, s.hasPrev, s.hasNext, s.theater, !!p, p ? p.error : '', p ? p.state : '',
-    s.menu ? JSON.stringify(s.menu) : ''].join('|');
+    s.menu ? JSON.stringify(s.menu) : '', s.dl, s.offline, s.download, s.sub, s.rate].join('|');
 };
 
 function stateChanged(prev) {
@@ -163,7 +166,8 @@ function render() {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.tab === S.tab));
   $('#heading').textContent = TITLES[S.tab];
   if (S.tab !== 'now') setAccent();
-  const f = { now: renderNow, next: renderNext, schedule: renderSchedule, lists: renderLists, browse: renderBrowse, settings: renderSettings }[S.tab];
+  const f = { now: renderNow, next: renderNext, schedule: renderSchedule, lists: renderLists, browse: renderBrowse,
+    downloads: renderDownloads, settings: renderSettings }[S.tab];
   view.innerHTML = f();
   view.dataset.tab = S.tab;
   view.scrollTop = keep;
@@ -196,10 +200,12 @@ function renderNow() {
   if (m.format) facts.push(m.format.replace(/_/g, ' '));
   if (m.year) facts.push(m.year);
   if (m.mstatus) facts.push(STATUS_NAMES[m.mstatus] || m.mstatus);
-  let h = `<div class="hero" style="--img:url('${esc(m.banner || m.cover || '')}')">
-    ${m.cover ? `<img class="cover" src="${esc(m.cover)}">` : ''}
+  // A download plays without a connection, so its cover comes from the Thor.
+  const cover = s.offline && s.anilistId ? `https://shelf.anideck/cover/${s.anilistId}` : m.cover;
+  let h = `<div class="hero" style="--img:url('${esc(s.offline ? cover : m.banner || m.cover || '')}')">
+    ${cover ? `<img class="cover" src="${esc(cover)}" data-alt="${esc(m.cover || '')}">` : ''}
     <div class="meta">
-      <div class="kicker">${s.page === 'watch' ? 'Now playing' : 'On the top screen'}</div>
+      <div class="kicker">${s.offline ? 'Playing a download' : s.page === 'watch' ? 'Now playing' : 'On the top screen'}</div>
       <div class="htitle">${esc(s.show || m.title || '')}</div>
       ${s.page === 'watch' ? `<div class="hsub">Episode ${s.ep}${s.epTitle ? ' · ' + esc(s.epTitle) : ''}</div>` : ''}
       <div class="facts">${facts.map((f) => `<span class="chip">${esc(f)}</span>`).join('')}${listChip(m)}${m.nextAt ? `<span class="chip">Ep ${m.nextEp} in ${until(m.nextAt)}</span>` : ''}</div>
@@ -211,7 +217,10 @@ function renderNow() {
       ${s.anilistId ? `<button class="btn xl" data-act="save">${isSaved(s.anilistId) ? '★ Saved' : '☆ Save show'}</button>` : ''}</div>`;
   }
   const p = s.player;
-  if (p && p.state === 'error' && p.allFailed) {
+  if (s.offline && p && p.state === 'error') {
+    h += `<div class="error"><div class="et"><b>This download won't play</b>${esc(p.error)}. Delete it in Downloads and
+      download the episode again.</div><button class="btn" data-act="closeDl">Back to the site</button></div>`;
+  } else if (p && p.state === 'error' && p.allFailed) {
     h += `<div class="error"><div class="et"><b>None of the servers could play this episode</b>Some of the site's video
       servers can't be reached from this network. Try again later, or pick a server to retry it.</div>
       <button class="btn" data-cmd="menu" data-label="Server">Servers</button></div>`;
@@ -230,16 +239,56 @@ function renderNow() {
     <button class="ctl" data-cmd="seekBy" data-d="10">${I.fwd10}</button>
     <button class="ctl" data-cmd="next" ${s.hasNext ? '' : 'disabled'}>${I.next}</button>
   </div>
-  <div class="pills">
-    <button class="pill" data-cmd="skip">Skip intro / outro</button>
+  <div class="pills">${s.offline ? offlinePills(s) : sitePills(s)}</div>`;
+  return h + (s.offline ? dlStrip(s) : episodeStrip(s, m)) + (s.offline ? (S.subSheet ? subSheet(s) : '') : s.menu ? menuSheet(s.menu) : '');
+}
+
+const savePill = (s) => (s.anilistId ? `<button class="pill ${isSaved(s.anilistId) ? 'on' : ''}" data-act="save">${isSaved(s.anilistId) ? '★ Saved' : '☆ Save show'}</button>` : '');
+
+function sitePills(s) {
+  return `<button class="pill" data-cmd="skip">Skip intro / outro</button>
     <button class="pill ${s.theater ? 'on' : ''}" data-cmd="theater">Fill screen</button>
     <button class="pill" data-cmd="captions">Subtitles</button>
     <button class="pill" data-act="speed">Speed ${S.rate}×</button>
     <button class="pill" data-cmd="menu" data-label="Server">Server</button>
     <button class="pill" data-cmd="menu" data-label="Language">Sub / Dub</button>
-    ${s.anilistId ? `<button class="pill ${isSaved(s.anilistId) ? 'on' : ''}" data-act="save">${isSaved(s.anilistId) ? '★ Saved' : '☆ Save show'}</button>` : ''}
-  </div>`;
-  return h + episodeStrip(s, m) + (s.menu ? menuSheet(s.menu) : '');
+    ${dlPill(s)}${savePill(s)}`;
+}
+
+// A download doesn't know where the opening is, and its subtitles are tracks in the file.
+function offlinePills(s) {
+  const name = s.sub >= 0 && s.subs ? s.subs[s.sub] : 'Off';
+  return `<button class="pill" data-cmd="skip">Skip 85 s</button>
+    <button class="pill ${s.sub >= 0 ? 'on' : ''}" data-act="subs">Subtitles · ${esc(name.length > 26 ? name.slice(0, 25) + '…' : name)}</button>
+    <button class="pill" data-act="speed">Speed ${s.rate || 1}×</button>
+    <button class="pill" data-act="closeDl">Back to the site</button>
+    ${savePill(s)}`;
+}
+
+// The episode's download once there is one; servers without downloads leave the button dimmed.
+function dlPill(s) {
+  const r = dlFor(s);
+  if (r && r.state === 'done') return `<button class="pill on" id="dlPill" data-act="playDl" data-dl="${esc(r.id)}">Play download</button>`;
+  if (!s.dl) return '';
+  if (r && r.state === 'failed') return `<button class="pill" id="dlPill" data-tab="downloads">Download failed</button>`;
+  if (r) return `<button class="pill" id="dlPill" data-tab="downloads">${esc(dlShort(r))}</button>`;
+  return `<button class="pill ${s.dl === 'off' ? 'dim' : ''}" id="dlPill" data-act="download">Download</button>`;
+}
+
+function subSheet(s) {
+  const opts = (s.subs || []).map((n, i) => `<button class="choice${s.sub === i ? ' on' : ''}" data-act="sub" data-i="${i}"><b>${esc(n)}</b></button>`).join('');
+  return `<div class="sheet"><div class="sheet-head"><div class="sheet-title">Subtitles</div>
+      <button class="btn" data-act="closeSheet">Close</button></div>
+    <div class="choices"><button class="choice${s.sub < 0 ? ' on' : ''}" data-act="sub" data-i="-1"><b>Off</b></button>${opts}</div>
+    <div class="note">Y on the controller turns subtitles on and off.</div></div>`;
+}
+
+// The show's other downloaded episodes, in place of the site's episode list.
+function dlStrip(s) {
+  const mine = (S.dls.items || []).filter((r) => r.state === 'done' && sameShow(r, s)).sort((x, y) => x.ep - y.ep);
+  if (mine.length < 2) return '';
+  return `<div class="eps-head"><div class="slbl">Downloaded episodes</div></div><div class="strip" id="strip">${mine.map((r) =>
+    `<button class="ep${r.ep === s.ep ? ' cur' : ''}${dlWatched(r) ? ' seen' : ''}" data-act="playDl" data-dl="${esc(r.id)}">${r.ep}</button>`).join('')}</div>`;
 }
 
 // The choices of the site's open Server or Language menu, picked here instead of on the top screen.
@@ -491,6 +540,123 @@ function renderBrowse() {
   <div class="note" style="margin-top:26px">Pages open on the top screen. You can also tap and scroll the site up there.</div>`;
 }
 
+// ---- downloads ----
+
+const sameShow = (r, s) => (s.anilistId > 0 ? r.a === s.anilistId : r.show === s.show);
+const dlFor = (s) => (s.page === 'watch' ? (S.dls.items || []).find((r) => r.ep === s.ep && sameShow(r, s)) : null);
+const dlActive = (r) => r.state === 'preparing' || r.state === 'downloading';
+const dlWatched = (r) => r.d > 0 && r.t >= r.d * 0.92;
+const dlPct = (r) => (r.size > 0 ? Math.min(100, Math.round(((r.got || 0) / r.size) * 100)) : 0);
+const mb = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : Math.round((n || 0) / 1e6) + ' MB');
+const dlShort = (r) => (r.state === 'preparing' ? 'Preparing download…' : r.size ? `Downloading ${dlPct(r)}%` : 'Downloading…');
+
+function dlStatus(r) {
+  if (r.state === 'preparing') return r.note || 'Getting the episode ready';
+  if (!r.size) return r.note || 'Starting';
+  let line = `${mb(r.got)} of ${mb(r.size)} · ${dlPct(r)}%`;
+  const v = S.speed[r.id];
+  if (r.note) line = r.note + ' · ' + line;
+  else if (v > 0) line += ` · ${Math.max(1, Math.round((r.size - r.got) / v / 60))} min left`;
+  return line;
+}
+
+function renderDownloads() {
+  const items = S.dls.items || [];
+  const foot = `<div class="note" style="margin-top:26px">Saved in ${esc(S.dls.folder || 'Movies/AniDeck')} on this Thor ·
+    ${mb(S.dls.used)} used, ${mb(S.dls.free)} free. Episodes download in the language you watch in (Sub or Dub),
+    in the quality picked in Settings.</div>`;
+  if (!items.length) {
+    return `<div class="empty"><b>No downloads yet</b>Press Download on Now Playing, or under the video on the top screen.
+      Downloaded episodes play without a connection, here and from CrossBar.</div>` + foot;
+  }
+  let h = '';
+  const going = items.filter(dlActive), failed = items.filter((r) => r.state === 'failed');
+  if (going.length) h += `<div class="slbl">Downloading</div><div class="rows">${going.map((r) => dlRow(r, false)).join('')}</div>`;
+  if (failed.length) {
+    h += `<div class="slbl"${going.length ? ' style="margin-top:30px"' : ''}>Didn't finish</div>
+      <div class="rows">${failed.map((r) => dlRow(r, false)).join('')}</div>`;
+  }
+  const shows = [];
+  for (const r of items.filter((x) => x.state === 'done')) {
+    const k = r.a > 0 ? 'a' + r.a : 's' + r.show;
+    let g = shows.find((x) => x.k === k);
+    if (!g) shows.push((g = { k, show: r.show, items: [] }));
+    g.items.push(r);
+  }
+  for (const g of shows) {
+    g.items.sort((x, y) => x.ep - y.ep);
+    const size = g.items.reduce((n, r) => n + (r.size || 0), 0);
+    h += `<div class="slbl" style="margin-top:30px">${esc(g.show)} · ${g.items.length} ${g.items.length === 1 ? 'episode' : 'episodes'} · ${mb(size)}</div>
+      <div class="rows">${g.items.map((r) => dlRow(r, true)).join('')}</div>`;
+  }
+  return h + foot;
+}
+
+// grouped: under its show's heading, so the row leads with the episode.
+function dlRow(r, grouped) {
+  const id = esc(r.id);
+  const img = r.a > 0 ? `<img src="https://shelf.anideck/cover/${r.a}" loading="lazy">` : '<div class="noimg"></div>';
+  const ep = `Episode ${r.ep}${r.epTitle ? ' · ' + esc(r.epTitle) : ''}`;
+  let lines, acts;
+  if (r.state === 'done') {
+    const left = dlWatched(r) ? 'watched' : r.d > 0 && r.t > 5 ? `${Math.max(1, Math.round((r.d - r.t) / 60))} min left` : '';
+    const playing = S.state.offline && S.state.download === r.id;
+    lines = `<div class="m">${esc([r.quality, r.version, mb(r.size), left].filter(Boolean).join(' · '))}</div>
+      ${r.d > 0 && r.t > 5 ? `<div class="prog"><i style="width:${Math.min(100, Math.round((r.t / r.d) * 100))}%"></i></div>` : ''}`;
+    acts = `<button class="btn primary" data-act="playDl" data-dl="${id}">${playing ? 'Playing' : 'Play'}</button>
+      <button class="btn ${S.confirmDl === r.id ? 'danger' : ''}" id="del-${id}" data-act="deleteDl" data-dl="${id}">${S.confirmDl === r.id ? 'Delete?' : 'Delete'}</button>`;
+  } else if (r.state === 'failed') {
+    lines = `<div class="m err">${esc(r.error || 'The download failed')}</div>`;
+    acts = `<button class="btn primary" data-act="retryDl" data-dl="${id}">Retry</button>
+      <button class="btn" data-act="deleteDl" data-dl="${id}">Remove</button>`;
+  } else {
+    lines = `<div class="m dl-line">${esc(dlStatus(r))}</div><div class="prog"><i class="dl-bar" style="width:${dlPct(r)}%"></i></div>`;
+    acts = `<button class="btn" data-act="deleteDl" data-dl="${id}">Cancel</button>`;
+  }
+  return `<div class="row" data-dlrow="${id}">${img}<div class="ct">
+      <div class="t">${grouped ? ep : esc(r.show)}</div>${grouped ? '' : `<div class="m">${ep}</div>`}${lines}</div>
+    <div class="dl-acts">${acts}</div></div>`;
+}
+
+// From onDownloads, and from polling while episodes download.
+function dlUpdate(j) {
+  if (!j || !j.items) return;
+  const shapeOf = (d) => (d.items || []).map((r) => [r.id, r.state, r.t, r.subs ? r.subs.length : 0, r.error].join(':')).join(',');
+  const before = shapeOf(S.dls), now = Date.now(), dt = (now - S.dlAt) / 1000;
+  for (const r of j.items) {
+    const old = (S.dls.items || []).find((x) => x.id === r.id);
+    if (r.state !== 'downloading' || !old || !(r.got > old.got) || !(dt > 0.3)) continue;
+    const v = (r.got - old.got) / dt;
+    S.speed[r.id] = S.speed[r.id] ? S.speed[r.id] * 0.7 + v * 0.3 : v;
+  }
+  S.dlAt = now;
+  S.dls = j;
+  dlBadge();
+  if (before !== shapeOf(j) && (S.tab === 'downloads' || S.tab === 'now' || S.tab === 'settings') && !S.dragging) render();
+  else dlProgress();
+}
+
+// Progress in place, without re-rendering under a finger or the highlight.
+function dlProgress() {
+  for (const r of S.dls.items || []) {
+    if (!dlActive(r)) continue;
+    const row = document.querySelector(`[data-dlrow="${CSS.escape(r.id)}"]`);
+    if (!row) continue;
+    const line = row.querySelector('.dl-line'), bar = row.querySelector('.dl-bar');
+    if (line) line.textContent = dlStatus(r);
+    if (bar) bar.style.width = dlPct(r) + '%';
+  }
+  const pill = $('#dlPill'), cur = dlFor(S.state);
+  if (pill && cur && dlActive(cur)) pill.textContent = dlShort(cur);
+}
+
+function dlBadge() {
+  const n = (S.dls.items || []).filter(dlActive).length;
+  const b = $('#dlBadge');
+  b.textContent = n;
+  b.classList.toggle('show', n > 0);
+}
+
 function signInBody() {
   return `<div class="note">Log in to the site with your AniList account on the top screen. Your Watching and Completed
       lists then show up here, and finished episodes update your progress.</div>
@@ -529,6 +695,11 @@ function renderSettings() {
     <div class="group"><div class="gt">Notifications</div>
       ${toggle('notify', 'New episode alerts', 'For shows on your Watching list, checked every 30 minutes on Wi-Fi.')}
     </div>
+    <div class="group"><div class="gt">Downloads</div>
+      ${toggle('dlHD', 'Download in 1080p', 'Off: 480p, which takes much less space. Episodes download in the language you watch in, Sub or Dub.')}
+      <div class="note" style="margin:0">${(S.dls.items || []).filter((r) => r.state === 'done').length} downloaded (${mb(S.dls.used)}) in
+        ${esc(S.dls.folder || 'Movies/AniDeck')}, with ${mb(S.dls.free)} free on this Thor.</div>
+    </div>
     <div class="group"><div class="gt">On this Thor</div>
       <div class="note" style="margin:0 0 16px">${S.shelf.recent.length} recently played, ${S.shelf.saved.length} saved shows. They show on
         Now Playing and in CrossBar's bottom screen, with covers kept here so they work offline.</div>
@@ -539,16 +710,16 @@ function renderSettings() {
       <b>Select</b><span>Switch the controller between the screens. Opening a show from this screen gives it to the top screen.</span>
       <b>D-pad / left stick</b><span>Move the highlight</span>
       <b>A</b><span>Choose the highlighted item; with nothing highlighted, play or pause</span>
-      <b>B</b><span>Back: closes the keyboard and menus, leaves fill-screen, then goes back a page</span>
+      <b>B</b><span>Back: closes a download, the keyboard and menus, leaves fill-screen, then goes back a page</span>
       <b>Right stick</b><span>Scroll</span>
       <b>Start</b><span>Play or pause</span>
-      <b>X</b><span>Skip intro or outro</span>
-      <b>Y</b><span>Fill screen on or off</span>
+      <b>X</b><span>Skip intro or outro (85 seconds in a download)</span>
+      <b>Y</b><span>Fill screen on or off; subtitles on or off in a download</span>
       <b>L1 / R1</b><span>Back or forward 10 seconds</span>
       <b>L2 / R2</b><span>Previous or next episode</span>
       <b>Fill-screen</b><span>D-pad left/right seeks, up/down changes the volume</span>
     </div></div>
-    <div class="note">AniDeck ${esc(S.version)}. Episodes stream from ${esc((S.settings.site || '').replace(/^https:\/\//, ''))}; downloads are turned off.</div>`;
+    <div class="note">AniDeck ${esc(S.version)}. Episodes stream from ${esc((S.settings.site || '').replace(/^https:\/\//, ''))}; downloads are saved on this Thor.</div>`;
 }
 
 // ---- chrome ----
@@ -584,7 +755,7 @@ function toast(msg) {
 // ---- controller: Pad.java sends the d-pad, A and B here while this screen has the controller ----
 
 const K = { active: false, on: false, el: null, key: '', home: '' };
-const DATA_KEYS = ['tab', 'cmd', 'label', 'd', 'ep', 'open', 'act', 'set', 'pick', 'list', 'range', 'go'];
+const DATA_KEYS = ['tab', 'cmd', 'label', 'd', 'ep', 'open', 'act', 'set', 'pick', 'list', 'range', 'go', 'dl', 'i'];
 // Names a button across re-renders, which replace the elements.
 const keyOf = (el) => el.id || [el.tagName, ...DATA_KEYS.map((k) => el.dataset[k] || ''), el.textContent.trim().slice(0, 24)].join('|');
 
@@ -660,6 +831,10 @@ function navOk() {
 function navBack() {
   const a = document.activeElement;
   if (a && a.tagName === 'INPUT') return a.blur();
+  if (S.subSheet) {
+    S.subSheet = false;
+    return render();
+  }
   if (S.state.menu) return D.cmd(JSON.stringify({ c: 'menu', label: S.state.menu.label }));
   if (S.tab !== 'now') {
     S.tab = 'now';
@@ -713,9 +888,64 @@ document.addEventListener('click', (ev) => {
 
 function act(a, t) {
   switch (a) {
-    case 'speed':
-      S.rate = RATES[(RATES.indexOf(S.rate) + 1) % RATES.length];
+    case 'speed': {
+      const cur = S.state.offline ? S.state.rate || 1 : S.rate;
+      S.rate = RATES[(RATES.indexOf(cur) + 1) % RATES.length];
       D.cmd(JSON.stringify({ c: 'rate', r: S.rate }));
+      render();
+      break;
+    }
+    case 'download':
+      if (S.state.dl === 'off') {
+        toast("This server doesn't offer downloads. Open Server and pick one marked Downloads");
+        break;
+      }
+      D.cmd(JSON.stringify({ c: 'download' }));
+      toast('Getting the episode ready to download…');
+      break;
+    case 'playDl':
+      D.playDownload(t.dataset.dl);
+      if (S.tab !== 'now') {
+        S.tab = 'now';
+        render();
+      }
+      break;
+    case 'closeDl':
+      D.closeDownload();
+      break;
+    case 'retryDl':
+      D.retryDownload(t.dataset.dl);
+      toast('Trying again on the top screen…');
+      break;
+    // Deleting a downloaded episode takes a second press; canceling one that's downloading doesn't.
+    case 'deleteDl': {
+      const id = t.dataset.dl, r = (S.dls.items || []).find((x) => x.id === id);
+      clearTimeout(S.confirmTimer);
+      if (r && r.state === 'done' && S.confirmDl !== id) {
+        S.confirmDl = id;
+        S.confirmTimer = setTimeout(() => {
+          S.confirmDl = '';
+          if (S.tab === 'downloads') render();
+        }, 4000);
+        render();
+        break;
+      }
+      S.confirmDl = '';
+      D.deleteDownload(id);
+      toast(r && r.state === 'done' ? `Deleted episode ${r.ep}` : 'Download canceled');
+      break;
+    }
+    case 'subs':
+      S.subSheet = true;
+      render();
+      break;
+    case 'sub':
+      D.cmd(JSON.stringify({ c: 'sub', i: +t.dataset.i }));
+      S.subSheet = false;
+      render();
+      break;
+    case 'closeSheet':
+      S.subSheet = false;
       render();
       break;
     case 'watchEp':
@@ -777,16 +1007,24 @@ function boot() {
     S.settings = j.settings || {};
     S.version = j.version || '';
     S.shelf = j.shelf || S.shelf;
+    S.dls = j.downloads || S.dls;
   } catch (e) {}
   if (S.state.page !== 'watch' && S.state.page !== 'info' && S.lib.account) S.tab = 'next';
   if (S.state.anilistId && !entry(S.state.anilistId)) D.media(S.state.anilistId);
   badge();
+  dlBadge();
   render();
   tickClock();
   setInterval(tickClock, 15000);
   setInterval(() => {
     if (S.tab === 'next' || S.tab === 'schedule') render();
   }, 60000);
+  setInterval(() => {
+    if (!(S.dls.items || []).some(dlActive) || (S.tab !== 'downloads' && S.tab !== 'now')) return;
+    try {
+      dlUpdate(JSON.parse(D.downloads()));
+    } catch (e) {}
+  }, 1000);
 }
 
 boot();

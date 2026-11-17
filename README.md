@@ -21,7 +21,7 @@ Commits are in the order the projects were last updated, and each is dated to wh
 - **2026-11-13:** CrossBar performance presets and bottom-screen feeds; AniDeck crash recovery, recently played and saved shows; Coronamon bug log, with new bugs sent to Grok Build and GitHub issues; CrossBar problem reports to Coronamon; AniDeck renderer crash reports to Coronamon
 - **2026-11-14:** CrossBar Now Playing for video apps; AniDeck on the bottom screen
 - **2026-11-15:** checks in with Grok Build each time the Thor is plugged in and hands new bugs to automatic fix runs
-- **2026-11-16:** Coronamon: adds a Grok Build page to the Den with buttons to check status, pause or resume automatic runs, turn them off or on, stop the cu…
+- **2026-11-16:** Coronamon: adds a Grok Build page to the Den with buttons to check status, pause or resume automatic runs, turn them off or on, stop the cu…; Downloads: save episodes on the Thor and watch them offline
 
 ## Building
 

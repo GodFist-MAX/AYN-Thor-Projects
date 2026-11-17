@@ -2,7 +2,8 @@
 // proves bridge calls come from here, and with AniNav (nav.js). It reports the page and player to
 // the app, carries out commands from the controller and the bottom screen, and draws the
 // controller's highlight. The player is the site's <strmcx-embed> element: only its public
-// methods and events are used, never its stream or download links.
+// methods and events are used, never its stream links. Downloads start from the site's own
+// Download button; AniDeck takes the page it opens and saves the episode (Downloads.java).
 (nonce, Nav) => {
   'use strict';
   // The Thor's WebView (Chrome 109) lacks AbortSignal.any, which the site's health check uses;
@@ -89,6 +90,12 @@
     b.click();
     return true;
   };
+  // The site's Download button under the player; servers without downloads leave it disabled.
+  const dlButton = () => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Download');
+  const dlState = () => {
+    const b = dlButton();
+    return !b ? '' : b.disabled || b.getAttribute('aria-disabled') === 'true' ? 'off' : 'on';
+  };
 
   function state() {
     const pg = page();
@@ -109,6 +116,8 @@
       hasNext: enabled('Next Episode') || eps.some((e) => e.n > ep),
       player: embed ? player : null,
       theater,
+      dl: pg === 'watch' ? dlState() : '',
+      lang: pg === 'watch' && button('Language') ? button('Language').textContent.trim().toLowerCase() : '',
       menu: pg === 'watch' ? openMenu() : null,
       nav: ringOn && !!focused && focused.isConnected,
       typing: editable(document.activeElement),
@@ -598,9 +607,41 @@
         else move(c.d === 'show' ? null : c.d);
         break;
       case 'blur': if (document.activeElement) document.activeElement.blur(); break;
+      case 'download': download(); break;
     }
     send();
   };
+
+  // ---- downloads ----
+
+  // The site's Download button, and the player's (which asks the page), open the site's file host
+  // in a new tab. AniDeck takes that link instead and saves the episode itself.
+  const FILE_HOSTS = /(^|\.)ultracloud\.cc$/i;
+  let dlAt = 0; // when a Download button was last pressed, in case the file host moves
+  const openWindow = window.open;
+  window.open = function (url) {
+    let u = null;
+    try {
+      u = new URL(url, location.href);
+    } catch (e) {}
+    if (u && /^https?:$/.test(u.protocol) && (FILE_HOSTS.test(u.hostname) || Date.now() - dlAt < 2000)) {
+      B.download(nonce, u.href);
+      return null;
+    }
+    return openWindow.apply(this, arguments);
+  };
+  document.addEventListener('click', (ev) => {
+    const b = ev.target && ev.target.closest && ev.target.closest('button');
+    if (b && b.textContent.trim() === 'Download') dlAt = Date.now();
+  }, true);
+
+  function download() {
+    const b = dlButton();
+    if (!b) return B.notice(nonce, 'This page has no Download button');
+    if (dlState() === 'off') return B.notice(nonce, "This server doesn't offer downloads. Pick one marked Download from Server");
+    dlAt = Date.now();
+    b.click();
+  }
 
   // Opens or closes the Server or Language menu. In fill-screen mode it opens out of sight under
   // the player and its choices show on the bottom screen.

@@ -20,6 +20,7 @@ import java.util.concurrent.Executors;
 public class App extends Application {
     static final String TAG = "AniDeck";
     static final String CHANNEL_EPISODES = "episodes";
+    static final String CHANNEL_DOWNLOADS = "downloads";
     static App I;
 
     final Handler main = new Handler(Looper.getMainLooper());
@@ -41,13 +42,16 @@ public class App extends Application {
         NotificationChannel ch = new NotificationChannel(CHANNEL_EPISODES, "New episodes", NotificationManager.IMPORTANCE_DEFAULT);
         ch.setDescription("A new episode of a show on your Watching list is out");
         getSystemService(NotificationManager.class).createNotificationChannel(ch);
+        ch = new NotificationChannel(CHANNEL_DOWNLOADS, "Downloads", NotificationManager.IMPORTANCE_DEFAULT);
+        ch.setDescription("An episode finished downloading");
+        getSystemService(NotificationManager.class).createNotificationChannel(ch);
         net = new Net(this);
         library = new Library(this);
         SyncJob.schedule(this);
     }
 
-    /** On/off settings; all of them start on. */
-    static final String[] SWITCHES = {"autoTheater", "autoServer", "autoTrack", "notify"};
+    /** On/off settings; all of them start on. dlHD: downloads in 1080p rather than 480p. */
+    static final String[] SWITCHES = {"autoTheater", "autoServer", "autoTrack", "notify", "dlHD"};
 
     boolean setting(String key) { return prefs.getBoolean(key, true); }
 

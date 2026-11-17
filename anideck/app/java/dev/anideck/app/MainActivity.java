@@ -53,6 +53,8 @@ public class MainActivity extends Activity implements Net.Listener {
     static final String EXTRA_TITLE = "dev.anideck.app.TITLE";
     /** A watch page path, for history entries whose AniList id wasn't known. */
     static final String EXTRA_PATH = "dev.anideck.app.PATH";
+    /** A downloaded episode to play (its id in {@link Downloads}). */
+    static final String EXTRA_DOWNLOAD = "dev.anideck.app.DOWNLOAD";
     private static final String EXTRA_REFOCUS = "dev.anideck.app.REFOCUS";
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
@@ -66,7 +68,10 @@ public class MainActivity extends Activity implements Net.Listener {
     private WebChromeClient.CustomViewCallback fullDone;
     private TextView offline, toast, exitButton;
     private String inject;
+    /** What's on screen: the page's state, or the offline player's while it's open. */
     private JSONObject state = new JSONObject();
+    private JSONObject pageState = new JSONObject();
+    private OfflinePlayer player;
     private Session session;
     private boolean resumed, refocusing, loadFailed;
     private long refocusAt, lastBlockedNotice;
@@ -74,6 +79,8 @@ public class MainActivity extends Activity implements Net.Listener {
     private JSONObject pendingFind;
     /** An episode opened from the bottom screen or a notification starts playing if it loads before this. */
     private long playBefore;
+    /** A failed download to try again once its episode's page is open: {path, ep, until}. */
+    private JSONObject pendingDownload;
     /** Playback paused because the connection dropped, to pick up again once it's back. */
     private boolean resumeOnNet;
     private double resumeAt = -1;
@@ -113,22 +120,24 @@ public class MainActivity extends Activity implements Net.Listener {
         exitButton.setOnClickListener(v -> {
             exitButton.setVisibility(View.GONE);
             if (full != null) exitFull();
-            else cmd(App.obj("c", "theater", "on", false));
+            else pageCmd(App.obj("c", "theater", "on", false));
         });
         setContentView(root);
         // Keys reach dispatchKeyEventPreIme only along the focus path.
         web.requestFocus();
         setUpWeb();
+        player = new OfflinePlayer(this, root);
 
         session = new Session(this);
         App.I.net.listen(this);
         askForNotifications();
+        // A download from CrossBar or a notification plays over the last page, which loads underneath.
         if (!open(getIntent())) web.loadUrl(startUrl());
         if (App.I.pageCrashed) {
             App.I.pageCrashed = false;
             showToast("The page crashed, so AniDeck reloaded it");
         }
-        if (!App.I.net.online()) offline.setVisibility(View.VISIBLE);
+        if (!App.I.net.online() && !player.isOpen()) offline.setVisibility(View.VISIBLE);
         App.I.library.syncIfStale();
         Shelf.get(this).refresh();
         hideSystemUi();
@@ -147,7 +156,10 @@ public class MainActivity extends Activity implements Net.Listener {
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
         web.setBackgroundColor(Color.BLACK);
         web.addJavascriptInterface(new Bridge(), "AniDeckTop");
-        web.setDownloadListener((url, ua, disposition, mime, length) -> showToast("Downloads are turned off in AniDeck"));
+        web.setDownloadListener((url, ua, disposition, mime, length) -> {
+            if (mime != null && mime.startsWith("video/")) Downloads.get(this).start(url, pageState);
+            else showToast("AniDeck only saves episodes, with the Download button under the video");
+        });
         web.setWebViewClient(new Client());
         web.setWebChromeClient(new Chrome());
     }
@@ -177,16 +189,24 @@ public class MainActivity extends Activity implements Net.Listener {
         onState(App.obj("url", url, "page", page, "player", JSONObject.NULL).toString());
     }
 
+    /** The page's state, even while a download plays over it. */
     JSONObject state() {
-        return state;
+        return pageState;
     }
 
+    /** A command for the episode on screen: a download playing, or the site's player and page. */
     void cmd(JSONObject c) {
-        if (web != null) web.evaluateJavascript("window.__anideck&&__anideck.cmd(" + c + ")", null);
+        if (player.isOpen() && player.cmd(c)) return;
+        pageCmd(c);
     }
 
     private void cmd(String name) {
         cmd(App.obj("c", name));
+    }
+
+    /** A command for the page, even while a download plays over it. */
+    private void pageCmd(JSONObject c) {
+        if (web != null) web.evaluateJavascript("window.__anideck&&__anideck.cmd(" + c + ")", null);
     }
 
     private boolean hasPlayer() {
@@ -200,25 +220,82 @@ public class MainActivity extends Activity implements Net.Listener {
         } catch (JSONException e) {
             return;
         }
-        state = s;
-        App.I.state = json;
-        session.update(s);
+        pageState = s;
+        if (!player.isOpen()) show(s, json);
         Shelf.get(this).played(s);
-        App.I.toBottom("onState", json);
         if (pendingFind != null && "search".equals(App.str(s, "page"))) {
             App.put(pendingFind, "c", "find");
-            cmd(pendingFind);
+            pageCmd(pendingFind);
             pendingFind = null;
         }
         JSONObject p = s.optJSONObject("player");
         if (playBefore > 0 && p != null && "watch".equals(App.str(s, "page"))) {
-            if (SystemClock.uptimeMillis() < playBefore) cmd("autoplay");
+            if (SystemClock.uptimeMillis() < playBefore) pageCmd(App.obj("c", "autoplay"));
             playBefore = 0;
         }
         if (resumeAt >= 0 && p != null && p.optDouble("d", 0) > 0 && App.str(s, "url").equals(resumeUrl)) {
-            cmd(App.obj("c", "seek", "t", resumeAt, "play", true));
+            pageCmd(App.obj("c", "seek", "t", resumeAt, "play", true));
             resumeAt = -1;
         }
+        JSONObject pd = pendingDownload;
+        if (pd != null && SystemClock.uptimeMillis() > pd.optLong("until")) pendingDownload = null;
+        else if (pd != null && App.str(pd, "path").equals(App.str(s, "path")) && pd.optInt("ep") == s.optInt("ep") && !App.str(s, "dl").isEmpty()) {
+            pendingDownload = null;
+            pageCmd(App.obj("c", "download"));
+        }
+    }
+
+    /** Passes a state on to the bottom screen, CrossBar's Now Playing and the media controls. */
+    private void show(JSONObject s, String json) {
+        state = s;
+        App.I.state = json;
+        session.update(s);
+        App.I.toBottom("onState", json);
+    }
+
+    // ---- downloads ----
+
+    /** Plays a downloaded episode over the site, from the bottom screen, a notification or CrossBar. */
+    void playDownload(String id) {
+        JSONObject r = Downloads.get(this).get(id);
+        if (r == null || !"done".equals(App.str(r, "state"))) {
+            showToast("That download isn't on the Thor anymore");
+            return;
+        }
+        if (full != null) exitFull();
+        exitButton.setVisibility(View.GONE);
+        offline.setVisibility(View.GONE);
+        pageCmd(App.obj("c", "pause"));
+        player.open(r);
+    }
+
+    /** B or Close: back to the site, where it was. */
+    void closeDownload() {
+        if (!player.isOpen()) return;
+        player.close();
+        show(pageState, pageState.toString());
+        if (!App.I.net.online()) offline.setVisibility(View.VISIBLE);
+        if (web != null) web.requestFocus();
+    }
+
+    /** The offline player's state stands in for the page's while it's open. */
+    void playerState(JSONObject s) {
+        show(s, s.toString());
+    }
+
+    /** Retry on a failed download: its episode's page opens and its Download button is pressed again. */
+    void retryDownload(String id) {
+        JSONObject r = Downloads.get(this).get(id);
+        String path = r == null ? "" : App.str(r, "path");
+        int ep = r == null ? 0 : r.optInt("ep");
+        if (!path.startsWith("/watch/") || ep <= 0) return;
+        closeDownload();
+        if (path.equals(App.str(pageState, "path")) && ep == pageState.optInt("ep") && !App.str(pageState, "dl").isEmpty()) {
+            pageCmd(App.obj("c", "download"));
+            return;
+        }
+        go(path + "?ep=" + ep);
+        pendingDownload = App.obj("path", path, "ep", ep, "until", SystemClock.uptimeMillis() + 30000);
     }
 
     private final class Bridge {
@@ -245,6 +322,11 @@ public class MainActivity extends Activity implements Net.Listener {
         @JavascriptInterface public String prefs(String key) {
             return nonce.equals(key) ? App.I.pagePrefs().toString() : "{}";
         }
+
+        /** The site's Download button: url is its file host's page for the episode on screen. */
+        @JavascriptInterface public void download(String key, String url) {
+            if (nonce.equals(key) && url != null) h.post(() -> Downloads.get(MainActivity.this).start(url, pageState));
+        }
     }
 
     // ---- navigation ----
@@ -252,6 +334,11 @@ public class MainActivity extends Activity implements Net.Listener {
     /** Opens a show from a notification or the bottom screen: its watch page, found by AniList id. */
     private boolean open(Intent i) {
         if (i == null) return false;
+        String download = i.getStringExtra(EXTRA_DOWNLOAD);
+        if (download != null) {
+            playDownload(download);
+            return false;
+        }
         int id = i.getIntExtra(EXTRA_OPEN, 0), ep = i.getIntExtra(EXTRA_EP, 0);
         String path = i.getStringExtra(EXTRA_PATH);
         if (id <= 0 && path != null && path.matches("/watch/[\\w.~%/-]+")) {
@@ -266,6 +353,7 @@ public class MainActivity extends Activity implements Net.Listener {
 
     /** ep > 0 opens that episode, 0 the show's first page, and a negative ep its info page. */
     void openAnime(int id, int ep, String title) {
+        closeDownload();
         playBefore = ep > 0 ? SystemClock.uptimeMillis() + 30000 : 0;
         String path = App.I.library.path(id);
         if (path != null) {
@@ -285,11 +373,14 @@ public class MainActivity extends Activity implements Net.Listener {
     }
 
     void go(String path) {
+        closeDownload();
         web.loadUrl(Site.url(path));
     }
 
     void search(String query) {
-        if (query != null && !query.trim().isEmpty()) web.loadUrl(Site.search(query.trim()));
+        if (query == null || query.trim().isEmpty()) return;
+        closeDownload();
+        web.loadUrl(Site.search(query.trim()));
     }
 
     private void blocked(Uri u) {
@@ -404,14 +495,15 @@ public class MainActivity extends Activity implements Net.Listener {
     @Override public boolean dispatchTouchEvent(MotionEvent e) {
         if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
             App.I.pad.touched(Pad.TOP);
-            if (filling()) showExit();
+            // The offline player has its own Close button.
+            if (filling() && !player.isOpen()) showExit();
         }
         return super.dispatchTouchEvent(e);
     }
 
-    /** An episode fills the screen (fill-screen mode or the player's own fullscreen). */
+    /** An episode fills the screen (fill-screen mode, the player's own fullscreen or a download playing). */
     boolean filling() {
-        return full != null || state.optBoolean("theater");
+        return player.isOpen() || full != null || state.optBoolean("theater");
     }
 
     /** The touch way out of fill-screen mode, shown for a few seconds after touching the screen. */
@@ -502,7 +594,8 @@ public class MainActivity extends Activity implements Net.Listener {
     void back() {
         JSONObject menu = state.optJSONObject("menu");
         long now = SystemClock.uptimeMillis();
-        if (full != null) exitFull();
+        if (player.isOpen()) closeDownload();
+        else if (full != null) exitFull();
         else if (state.optBoolean("typing")) cmd("blur");
         else if (menu != null) cmd(App.obj("c", "menu", "label", App.str(menu, "label")));
         // Escape closes the site's menus; if one ignores it, the next B goes on.
@@ -512,7 +605,7 @@ public class MainActivity extends Activity implements Net.Listener {
             // The site puts focus back on the menu's button, with its own outline next to the highlight.
             h.postDelayed(() -> cmd("blur"), 350);
         }
-        else if (state.optBoolean("theater")) cmd(App.obj("c", "theater", "on", false));
+        else if (state.optBoolean("theater")) pageCmd(App.obj("c", "theater", "on", false));
         else if (!backOnSite()) {
             if (onSite(web.getUrl())) moveTaskToBack(true);
             else web.loadUrl(startUrl());
@@ -548,15 +641,16 @@ public class MainActivity extends Activity implements Net.Listener {
 
     // ---- connection ----
 
+    /** Downloads play on without a connection; only the site's player waits for it. */
     @Override public void onNet(boolean online) {
-        offline.setVisibility(online ? View.GONE : View.VISIBLE);
+        offline.setVisibility(online || player.isOpen() ? View.GONE : View.VISIBLE);
         App.I.toBottom("onNet", String.valueOf(online));
         h.removeCallbacks(checkResumed);
         if (!online) {
-            JSONObject p = state.optJSONObject("player");
+            JSONObject p = pageState.optJSONObject("player");
             if (p != null && "playing".equals(App.str(p, "state"))) {
                 resumeOnNet = true;
-                cmd("pause");
+                pageCmd(App.obj("c", "pause"));
             }
             return;
         }
@@ -565,23 +659,24 @@ public class MainActivity extends Activity implements Net.Listener {
             web.reload();
         } else if (resumeOnNet) {
             resumeOnNet = false;
-            cmd("play");
+            if (player.isOpen()) return;
+            pageCmd(App.obj("c", "play"));
             h.postDelayed(checkResumed, 8000);
         }
     }
 
     /** After a reconnect: a stream that gave up while offline reloads and continues at the same spot. */
     private void checkResumed() {
-        JSONObject p = state.optJSONObject("player");
-        if (p == null) return;
+        JSONObject p = pageState.optJSONObject("player");
+        if (p == null || player.isOpen()) return;
         String ps = App.str(p, "state");
         if ("playing".equals(ps)) return;
         if ("paused".equals(ps)) {
-            cmd("play");
+            pageCmd(App.obj("c", "play"));
             return;
         }
         resumeAt = p.optDouble("t", 0);
-        resumeUrl = App.str(state, "url");
+        resumeUrl = App.str(pageState, "url");
         web.reload();
     }
 
@@ -615,10 +710,10 @@ public class MainActivity extends Activity implements Net.Listener {
         if (id != Display.DEFAULT_DISPLAY) {
             BottomActivity b = App.I.bottom;
             if (b != null) b.finish();
-            theaterBefore = state.optBoolean("theater");
-            if (!theaterBefore) cmd(App.obj("c", "theater", "on", true));
+            theaterBefore = pageState.optBoolean("theater");
+            if (!theaterBefore) pageCmd(App.obj("c", "theater", "on", true));
         } else {
-            if (!theaterBefore && state.optBoolean("theater")) cmd(App.obj("c", "theater", "on", false));
+            if (!theaterBefore && pageState.optBoolean("theater")) pageCmd(App.obj("c", "theater", "on", false));
             ensureBottom();
         }
         hideSystemUi();
@@ -652,6 +747,7 @@ public class MainActivity extends Activity implements Net.Listener {
 
     @Override protected void onDestroy() {
         App.I.net.unlisten(this);
+        player.close();
         session.release();
         if (App.I.top == this) App.I.top = null;
         if (web != null) web.destroy();

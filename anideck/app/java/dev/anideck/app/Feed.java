@@ -19,8 +19,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * What CrossBar shows on its bottom screen while AniDeck is selected: recently played episodes, saved shows
- * and the AniList Watching list, read from the Thor so it works offline. call("feed") returns
+ * What CrossBar shows on its bottom screen while AniDeck is selected: recently played episodes, downloaded
+ * episodes, saved shows and the AniList Watching list, read from the Thor so it works offline. call("feed") returns
  * {"v":1,"sections":[{title, style, items:[{title, sub, img, progress, at, open}]}]}, where "open" holds the
  * extras for AniDeck's launch intent. Covers are at content://dev.anideck.app.feed/cover/{AniList id}.
  * Only CrossBar (and adb, for testing) may read it.
@@ -62,6 +62,14 @@ public final class Feed extends ContentProvider {
             if (e != null) items.put(recentItem(shelf, e));
         }
         if (items.length() > 0) sections.put(App.obj("title", "Continue Watching", "style", "cards", "items", items));
+
+        items = new JSONArray();
+        JSONArray downloads = Downloads.get(getContext()).finished();
+        for (int i = 0; i < downloads.length() && items.length() < 20; i++) {
+            JSONObject e = downloads.optJSONObject(i);
+            if (e != null) items.put(downloadItem(shelf, e));
+        }
+        if (items.length() > 0) sections.put(App.obj("title", "Downloaded", "style", "cards", "items", items));
 
         items = new JSONArray();
         for (int i = 0; i < saved.length(); i++) {
@@ -116,6 +124,18 @@ public final class Feed extends ContentProvider {
         if (id > 0) App.put(o, "open", open(id, open, show));
         else App.put(o, "open", App.obj(MainActivity.EXTRA_PATH, App.str(e, "path"), MainActivity.EXTRA_EP, open));
         return o;
+    }
+
+    /** Opens straight into the offline player, so it works without a connection. */
+    private static JSONObject downloadItem(Shelf shelf, JSONObject e) {
+        long t = e.optLong("t"), d = e.optLong("d");
+        String sub = "Episode " + e.optInt("ep");
+        if (d > 0 && t > d * 0.92) sub += " · watched";
+        else if (d > 0 && t > 5) sub += " · " + Math.max(1, Math.round((d - t) / 60.0)) + " min left";
+        else if (!App.str(e, "quality").isEmpty()) sub += " · " + App.str(e, "quality");
+        return App.obj("title", App.str(e, "show"), "sub", sub, "img", img(shelf, e.optInt("a"), ""),
+                "progress", d > 0 ? Math.min(1, (double) t / d) : 0, "at", Math.max(e.optLong("at"), e.optLong("finished")),
+                "open", App.obj(MainActivity.EXTRA_DOWNLOAD, App.str(e, "id")));
     }
 
     private static JSONObject watchingItem(Shelf shelf, JSONObject e) {

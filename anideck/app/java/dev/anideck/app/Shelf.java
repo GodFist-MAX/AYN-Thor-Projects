@@ -59,6 +59,15 @@ final class Shelf {
         return new File(covers, id + ".jpg");
     }
 
+    /** Downloaded shows keep their covers here too, for the Downloads tab and CrossBar. */
+    void keepCover(int id) {
+        fetch(id, false);
+    }
+
+    private static boolean downloaded(int id) {
+        return App.I != null && Downloads.get(App.I).has(id);
+    }
+
     synchronized JSONObject json() {
         return App.obj("recent", copy(recent), "saved", copy(saved));
     }
@@ -114,7 +123,7 @@ final class Shelf {
             for (int i = 0; i < recent.length(); i++) {
                 JSONObject e = recent.optJSONObject(i);
                 int id = e == null ? 0 : e.optInt("id");
-                if (id > 0 && indexOf(saved, id, "") < 0) cover(id).delete();
+                if (id > 0 && indexOf(saved, id, "") < 0 && !downloaded(id)) cover(id).delete();
             }
             recent = new JSONArray();
             cleared = current;
@@ -145,7 +154,7 @@ final class Shelf {
             saved.remove(i);
             keepCover = indexOf(recent, id, "") >= 0;
         }
-        if (!keepCover) cover(id).delete();
+        if (!keepCover && !downloaded(id)) cover(id).delete();
         changed();
         write(true);
     }
