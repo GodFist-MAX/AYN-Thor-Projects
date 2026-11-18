@@ -65,6 +65,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     Updates updates;
     Mac mac;
     Diagnostics diag;
+    Mind mind;
     final Handler main = new Handler(Looper.getMainLooper());
     private final Random rnd = new Random();
 
@@ -154,6 +155,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         bugs = new Bugs(this);
         mac = new Mac(this);
         diag = new Diagnostics(this);
+        mind = new Mind(this);
         channels();
         startForeground(NOTIF, petNotification());
         brain = new Brain(this);
@@ -185,6 +187,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         registerReceiver(packages, pf, RECEIVER_EXPORTED);
         main.postDelayed(updateTick, 3 * 60_000L);
         main.postDelayed(this::checkShizuku, 2 * 60_000L);
+        main.postDelayed(mindTick, 4 * 60_000L);
         try {
             Shizuku.addRequestPermissionResultListener((code, result) -> {
                 if (code == Shell.REQUEST) {
@@ -229,6 +232,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         crashWatch.stop();
         foreground.quit();
         updates.quit();
+        mind.quit();
         main.removeCallbacksAndMessages(null);
         instance = null;
         super.onDestroy();
@@ -868,6 +872,32 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
                 headline + "\nSaved for Grok. It goes to the Mac next time the Thor is plugged in.", null, "bug:" + pkg);
     }
 
+    // ---- for his Grok brain ----
+
+    private final Runnable mindTick = new Runnable() {
+        @Override
+        public void run() {
+            mind.tick();
+            main.postDelayed(this, 30 * 60_000L);
+        }
+    };
+
+    /** Whether a game or video is in front on either screen. */
+    boolean gameOnScreen() {
+        for (Brain.Stage s : stages) if (s.game) return true;
+        return false;
+    }
+
+    /** Whether his den is in front on the screen he's on. */
+    boolean denOnHisScreen() {
+        return Registry.SELF.equals(brain.stage().topPkg);
+    }
+
+    /** Whether a speech bubble would be welcome: he's out, awake, and not ghosting for a game or video. */
+    boolean canTalk() {
+        return showing() && !ghost && !brain.asleep();
+    }
+
     /** Package in front on each screen, by screen name. */
     JSONObject screensNow() {
         JSONObject o = new JSONObject();
@@ -1103,6 +1133,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         Util.put(o, "stages", st);
         Util.put(o, "bugs", Util.obj("waiting", bugs.waiting(), "rev", bugs.rev(), "lastSync", bugs.lastSync()));
         Util.put(o, "grok", Util.obj("state", grokState, "since", grokSince, "msg", grokMsg, "last", grokLast));
+        Util.put(o, "brain", mind.summary());
         Util.put(o, "permissions", permissions());
         Util.put(o, "settings", settings.toJson());
         return o;

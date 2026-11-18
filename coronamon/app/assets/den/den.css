@@ -164,7 +164,7 @@ h1 { font-size: 18px; margin: 0; color: var(--gold); white-space: nowrap; }
 .form .field:last-child { border-bottom: none; }
 .form .label { color: var(--gold); font-size: 12px; margin-bottom: 5px; }
 .form .note { color: var(--muted); font-size: 11px; margin-top: 5px; }
-textarea {
+textarea, input {
   width: 100%;
   font: inherit;
   color: var(--text);
@@ -175,7 +175,39 @@ textarea {
   resize: none;
   outline: none;
 }
-textarea:focus { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(255, 200, 74, 0.45); }
+textarea:focus, input:focus { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(255, 200, 74, 0.45); }
+
+.chat { display: flex; flex-direction: column; gap: 7px; padding: 4px 0 6px; }
+.say {
+  max-width: 84%;
+  padding: 5px 10px 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.say.you { align-self: flex-end; background: var(--panel2); border-color: #6b3a20; border-bottom-right-radius: 4px; }
+.say.me { align-self: flex-start; border-bottom-left-radius: 4px; }
+.say.oops { border-color: #6b2a22; color: var(--red); }
+.say.thinking { color: var(--muted); font-style: italic; }
+.say .who { display: block; font-size: 10.5px; color: var(--gold); }
+.say.you .who { color: var(--muted); text-align: right; }
+.say .at { display: block; font-size: 10px; color: var(--muted); text-align: right; margin-top: 2px; }
+.say .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; white-space: normal; }
+.say .acted { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.talkbar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 8px 0 6px;
+  background: var(--bg);
+}
+.talkbar.plain { position: static; background: none; }
+.talkbar button { flex: none; }
+.talkfoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
 .shots { display: flex; gap: 8px; margin-bottom: 6px; }
 .shots img { height: 84px; border-radius: 8px; border: 1px solid var(--line); }
 .bugbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }

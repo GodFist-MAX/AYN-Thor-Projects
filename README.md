@@ -22,6 +22,7 @@ Commits are in the order the projects were last updated, and each is dated to wh
 - **2026-11-14:** CrossBar Now Playing for video apps; AniDeck on the bottom screen
 - **2026-11-15:** checks in with Grok Build each time the Thor is plugged in and hands new bugs to automatic fix runs
 - **2026-11-16:** Coronamon: adds a Grok Build page to the Den with buttons to check status, pause or resume automatic runs, turn them off or on, stop the cu…; Downloads: save episodes on the Thor and watch them offline; Updates install on the Thor again
+- **2026-11-18:** Coronamon gets a Grok brain: chat in the Den's Talk tab, plus fresh lines every day
 
 ## Building
 

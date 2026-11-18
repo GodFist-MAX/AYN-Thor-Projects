@@ -24,6 +24,13 @@ Talks to the Coronamon app over adb (content://dev.grokbuild.coronamon.bridge).
   coro setup                           grant permissions, start Shizuku, wake him
   coro log [N]                         his logcat
 
+His Grok brain (xAI API; the key is kept encrypted on the Thor and never printed):
+  coro brain [status]                  on/off, key hint, model, today's spending, fresh lines
+  coro brain key [--file F]            give him an API key (from F, stdin, or a hidden prompt) | coro brain forget-key
+  coro brain ask "TEXT"                talk to him and wait for the reply | coro brain chat [N] | coro brain clear [notes|all]
+  coro brain yes|no [MSG:ACTION]       answer a button he offered (the newest one by default)
+  coro brain on|off | cap USD | model smartest|fastest|grok-4.3 | lines [refresh|show]
+
 Bugs, GitHub and Grok (corolink.py):
   coro sync [--dry-run] [--no-github]  take new bugs from the Thor, open/update GitHub issues, push waiting commits
   coro bugs [--all] [--local]          the bug log | coro bug ID [fixed [VERSION] | open | ignore | forget]
@@ -84,7 +91,8 @@ def b64(s):
     return base64.b64encode(str(s).encode()).decode()
 
 
-def bridge(method, arg=None, retries=8, **extras):
+def bridge(method, arg=None, retries=8, stdin=False, **extras):
+    """stdin=True sends the command to adb on stdin so secrets in it don't show in the Mac's process list."""
     parts = ["content", "call", "--uri", URI, "--method", method, "--extra", "enc:s:b64"]
     if arg is not None and arg != "":
         parts += ["--arg", b64(arg)]
@@ -99,7 +107,10 @@ def bridge(method, arg=None, retries=8, **extras):
     command = " ".join(shlex.quote(p) for p in parts)
     last = None
     for attempt in range(retries):
-        r = adb("shell", command, check=False)
+        if stdin:
+            r = subprocess.run([ADB, "-s", SERIAL, "shell"], input=command + "\n", capture_output=True, text=True, timeout=300)
+        else:
+            r = adb("shell", command, check=False)
         out = r.stdout or ""
         i, j = out.find("json="), out.rfind("}]")
         if i < 0 or j < 0:
@@ -412,6 +423,113 @@ def cmd_lines(args):
     print(json.dumps(r["lines"]["lines"], indent=1, ensure_ascii=False))
 
 
+KEY_RE = re.compile(r"^xai-[A-Za-z0-9_-]{20,300}$")
+BRAIN_MODELS = {"smartest": "grok-4.7", "fastest": "grok-4.20-0309-non-reasoning"}
+
+
+def brain_line(m):
+    who = {"user": "You", "me": "Coronamon", "error": "Problem"}.get(m.get("role"), m.get("role", "?"))
+    meta = [time.strftime("%H:%M", time.localtime(m.get("t", 0) / 1000))]
+    if m.get("ms"):
+        meta.append("%.1fs" % (m["ms"] / 1000.0))
+    if m.get("cost"):
+        meta.append("$%.4f" % m["cost"])
+    print("%s [%s]: %s" % (who, ", ".join(meta), m.get("text", "")))
+    for a in m.get("actions") or []:
+        hint = "   coro brain yes|no %s:%s" % (m.get("id"), a.get("id")) if a.get("state") == "asked" else ""
+        print("    button: %s (%s)%s" % (a.get("label"), a.get("state"), hint))
+
+
+def read_key(path):
+    if path:
+        with open(os.path.expanduser(path)) as f:
+            return f.read().strip()
+    if not sys.stdin.isatty():
+        return sys.stdin.read().strip()
+    import getpass
+    return getpass.getpass("xAI API key (hidden): ").strip()
+
+
+def cmd_brain(args):
+    sub = args.pop(0) if args else "status"
+    if sub == "status":
+        b = need(bridge("brain", "0"))
+        t, f = b.get("today") or {}, b.get("fresh") or {}
+        print("Grok brain: %s%s" % ("on" if b.get("on") else "off", "" if b.get("hasKey") else " (no API key yet: coro brain key)"))
+        if b.get("hasKey"):
+            print("Key %s   model %s   today %d calls, $%.3f of $%.2f" % (b.get("hint"), b.get("model"), t.get("calls", 0), t.get("cost", 0), b.get("cap", 0)))
+        made = time.strftime(", made %b %d %H:%M", time.localtime(f["at"] / 1000)) if f.get("at") else ""
+        print("Fresh lines: %s, %d in use%s" % ("on" if f.get("on") else "off", f.get("count", 0), made))
+        if b.get("notes"):
+            print("Remembers: " + "  /  ".join(n.get("text", "") for n in b["notes"]))
+        if b.get("busy"):
+            print("Thinking about something right now.")
+        if b.get("error"):
+            print("Last problem: " + b["error"])
+    elif sub == "key":
+        key = read_key(opt(args, "--file"))
+        if not KEY_RE.match(key):
+            raise CoroError("that doesn't look like an xAI API key (they start with xai-)")
+        try:
+            r = need(bridge("brain-key", retries=3, stdin=True, key=key))
+        except CoroError as e:
+            raise CoroError(str(e).replace(key, "<key>").replace(b64(key), "<key>"))
+        print("Saved on the Thor, encrypted: %s. He'll say hello in a moment." % r.get("hint"))
+    elif sub == "forget-key":
+        need(bridge("brain-key", "clear"))
+        print("Key removed from the Thor. He's back to his built-in lines.")
+    elif sub == "ask":
+        text = " ".join(args).strip()
+        if not text:
+            raise CoroError('usage: coro brain ask "TEXT"')
+        brain_line(need(bridge("brain-ask", text, retries=1)))
+    elif sub in ("on", "off"):
+        need(bridge("setting", "brain", value="true" if sub == "on" else "false"))
+        print("Grok brain " + sub)
+    elif sub == "cap":
+        if not args:
+            raise CoroError("usage: coro brain cap USD (a daily limit, 0.1 to 50)")
+        r = need(bridge("setting", "brainCap", value=args[0].lstrip("$")))
+        print("Daily limit: $%.2f" % r["brainCap"])
+    elif sub == "model":
+        if not args:
+            raise CoroError("usage: coro brain model smartest|fastest|grok-4.3")
+        name = BRAIN_MODELS.get(args[0].lower(), args[0])
+        need(bridge("setting", "brainModel", value=name))
+        print("Brain model: " + name)
+    elif sub == "lines":
+        r = need(bridge("brain-lines", args[0] if args else None))
+        if args and args[0] == "refresh":
+            print("Writing a new batch; it takes about two minutes." if r.get("started") else "Not now: already writing, brain off, or over the daily limit.")
+        elif args and args[0] == "show":
+            for k, lines in sorted((r.get("lines") or {}).get("lines", {}).items()):
+                print("%s:" % k)
+                for l in lines:
+                    print("    " + l)
+        else:
+            f = r.get("fresh") or {}
+            print("%d fresh lines in use%s" % (f.get("count", 0), time.strftime(", made %b %d %H:%M", time.localtime(f["at"] / 1000)) if f.get("at") else ""))
+    elif sub == "chat":
+        for m in need(bridge("brain", args[0] if args else "10")).get("chat", []):
+            brain_line(m)
+    elif sub == "clear":
+        need(bridge("brain-clear", args[0] if args else "chat"))
+        print("Cleared " + (args[0] if args else "the chat"))
+    elif sub in ("yes", "no"):
+        chat = need(bridge("brain", "60")).get("chat", [])
+        asked = [(m["id"], a["id"]) for m in chat for a in m.get("actions") or [] if a.get("state") == "asked"]
+        if args:
+            msg, _, act = args[0].rpartition(":")
+            asked = [x for x in asked if x[1] == act and (not msg or x[0] == msg)]
+        if not asked:
+            raise CoroError("no button is waiting for an answer")
+        msg, act = asked[-1]
+        a = need(bridge("brain-action", act, msg=msg, yes=sub == "yes"))["action"]
+        print("%s: %s" % (a.get("label"), a.get("state")))
+    else:
+        raise CoroError("unknown brain command %s (try coro help)" % sub)
+
+
 def cmd_shizuku(args):
     r = need(bridge("shizuku", args[0] if args else None))
     print("Shizuku: %s%s" % (r["state"], " (a prompt is showing on the Thor; tap Allow)" if args and r["state"] == "running" else ""))
@@ -484,6 +602,7 @@ COMMANDS = {
     "reports": cmd_reports, "report": cmd_report, "check": cmd_check, "update": cmd_update, "say": cmd_say, "act": cmd_act,
     "moves": cmd_moves, "hide": cmd_hide, "show": cmd_show, "summon": cmd_summon, "den": cmd_den, "shot": cmd_shot,
     "setting": cmd_setting, "lines": cmd_lines, "shizuku": cmd_shizuku, "setup": cmd_setup, "log": cmd_log,
+    "brain": cmd_brain,
 }
 
 

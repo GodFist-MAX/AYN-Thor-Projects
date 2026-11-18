@@ -2,10 +2,11 @@
   'use strict';
 
   const C = window.Coro;
-  const TABS = ['apps', 'activity', 'bugs', 'grok', 'inbox', 'settings', 'about'];
-  const TITLES = { apps: 'Apps', activity: 'Activity', bugs: 'Bugs', grok: 'Grok Build', inbox: 'Inbox', settings: 'Settings', about: 'About' };
+  const TABS = ['apps', 'talk', 'activity', 'bugs', 'grok', 'inbox', 'settings', 'about'];
+  const TITLES = { apps: 'Apps', talk: 'Talk', activity: 'Activity', bugs: 'Bugs', grok: 'Grok Build', inbox: 'Inbox', settings: 'Settings', about: 'About' };
   const QUIPS = {
     apps: 'Everything Grok Build made for the Thor. I keep an eye on all of it!',
+    talk: 'Ask me anything about the Thor... or just hang out!',
     activity: "Builds, installs, crashes... I remember all of it.",
     bugs: "Anything that breaks goes to Grok next time we're plugged into the Mac.",
     grok: 'I can ask the Mac to check on Grok Build, pause it or stop it.',
@@ -18,7 +19,7 @@
 
   function call(fn, ...args) {
     const r = JSON.parse(C[fn](...args));
-    if (!r.ok) throw new Error(r.error || 'failed');
+    if (!r.ok) throw new Error((r.error || 'failed').replace(/^[\w.$]+(Exception|Error): /, ''));
     return r.data;
   }
 
@@ -126,6 +127,7 @@
     grok_fixing: ['Grok Build is fixing', 'info'], grok_done: ['Grok Build finished', 'good', 'Grok Build stopped early'],
     grok_stopped: ['Grok Build stopped', 'info'],
     mac_control: ['Asked the Mac', 'info', "The Mac couldn't do it"], diagnostics: ['Diagnostics', 'info', 'Diagnostics found problems'],
+    brain: ['Grok brain', 'good'],
   };
 
   const GROK = { connected: ['Connected on the Mac', 'good'], away: ['Not ready on the Mac', 'warn'], fixing: ['Fixing things now', 'info'] };
@@ -511,6 +513,107 @@
     });
   }
 
+  // ---- talk: his Grok brain ----
+
+  const MODELS = [['grok-4.7', 'Smartest'], ['grok-4.20-0309-non-reasoning', 'Fastest']];
+  const ACTED = { done: 'done', doing: 'working on it...', declined: 'you said no', failed: "that didn't work" };
+  let talkDraft = '', talkRev = -1, talkPoll = 0, keyForm = false;
+
+  function money(n) {
+    return '$' + (n || 0).toFixed(n && n < 0.1 ? 3 : 2);
+  }
+
+  function talk() {
+    const b = call('brain');
+    talkRev = b.rev;
+    if (!b.hasKey || keyForm) return keyView(b);
+    const out = [];
+    if (!b.on) out.push(el('div', { class: 'note' }, 'My Grok brain is switched off. Turn it back on in Settings and we can talk.'));
+    const log = el('div', { class: 'chat' });
+    if (!b.chat.length && !b.busy) log.append(el('div', { class: 'empty' }, 'Ask me about the Thor, your apps, bugs or updates... or just say hi!'));
+    for (const m of b.chat) log.append(said(m));
+    if (b.busy) log.append(el('div', { class: 'say me thinking' }, el('span', { class: 'who' }, 'Coronamon'), 'Thinking...'));
+    const box = el('textarea', { id: 'talk-text', 'data-k': 'talk', rows: 2, maxlength: 2000, placeholder: 'Say something to Coronamon...' });
+    box.value = talkDraft;
+    box.addEventListener('input', () => { talkDraft = box.value; });
+    box.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      e.preventDefault();
+      if (box.value.trim()) sendTalk();
+      else C.keyboard();
+    });
+    out.push(log, el('div', { class: 'talkbar' }, box,
+      el('button', { class: 'primary', 'data-k': 'send', disabled: b.busy || !b.on, onclick: sendTalk }, 'Send')));
+    const t = b.today || {};
+    const model = (MODELS.find(([id]) => id === b.model) || [b.model, b.model])[1];
+    out.push(el('div', { class: 'talkfoot' },
+      el('span', {}, model + ' brain  ·  today ' + money(t.cost) + ' of ' + money(b.cap) +
+        (b.notes.length ? '  ·  remembers ' + plural(b.notes.length, 'thing') : '')),
+      el('button', { 'data-k': 'clear', disabled: !b.chat.length, onclick: () => confirmThen('Clear the chat?',
+        'He forgets this conversation. Things you asked him to remember stay until you forget them in Settings.', 'Clear chat',
+        () => { safe(() => call('brainClear', 'chat')); render(); }) }, 'Clear chat')));
+    return out;
+  }
+
+  function said(m) {
+    const you = m.role === 'user', oops = m.role === 'error';
+    const kids = [el('span', { class: 'who' }, you ? 'You' : 'Coronamon'), el('div', {}, m.text)];
+    for (const a of m.actions || []) {
+      kids.push(a.state === 'asked'
+        ? el('div', { class: 'acts' },
+          el('button', { class: 'primary', onclick: () => { if (safe(() => call('brainAction', m.id, a.id, true))) render(); } }, a.label),
+          el('button', { onclick: () => { if (safe(() => call('brainAction', m.id, a.id, false))) render(); } }, 'No thanks'))
+        : el('div', { class: 'acted' }, a.label + ': ' + (ACTED[a.state] || a.state)));
+    }
+    kids.push(el('span', { class: 'at' }, when(m.t) + (m.ms ? '  ·  ' + (m.ms / 1000).toFixed(1) + 's' : '')));
+    return el('div', { class: 'say ' + (you ? 'you' : oops ? 'me oops' : 'me') }, kids);
+  }
+
+  function sendTalk() {
+    const text = talkDraft.trim();
+    if (!text) return;
+    if (safe(() => call('brainSend', text))) {
+      talkDraft = '';
+      render();
+    }
+  }
+
+  function keyView(b) {
+    const input = el('input', { type: 'password', id: 'key-in', 'data-k': 'key', placeholder: 'xai-...', autocomplete: 'off', spellcheck: 'false' });
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (input.value.trim()) saveKey(input.value);
+      else C.keyboard();
+    });
+    const out = [el('div', { class: 'prose' },
+      el('h3', {}, b.hasKey ? 'Change my API key' : 'Give me a Grok brain!'),
+      el('p', {}, 'With an xAI API key I can really talk: answer questions about the Thor, its apps, bugs and updates, and come up with new things to say every day.'),
+      el('p', {}, 'Make a key at console.x.ai (it needs credits) and paste it here. It stays on this Thor, encrypted, and only goes to xAI. ' +
+        'I stop for the day when I reach the daily limit in Settings.')),
+      el('div', { class: 'talkbar plain' }, input, el('button', { class: 'primary', onclick: () => saveKey(input.value) }, 'Save key'))];
+    if (b.hasKey) out.push(el('div', { class: 'buttons' }, el('button', { onclick: () => { keyForm = false; render(); } }, 'Keep my key (' + b.hint + ')')));
+    return out;
+  }
+
+  function saveKey(value) {
+    const hint = safe(() => call('brainKey', value.trim()));
+    if (!hint) return;
+    keyForm = false;
+    toast('Key ' + hint + ' saved. My brain is waking up!');
+    show('talk');
+  }
+
+  function watchTalk() {
+    talkPoll = setTimeout(function tick() {
+      if (current !== 'talk' || keyForm) return;
+      let b = null;
+      try { b = call('brain'); } catch (e) { /* the service may be restarting */ }
+      if (b && b.rev !== talkRev && !overlay()) render();
+      else talkPoll = setTimeout(tick, b && b.busy ? 800 : 4000);
+    }, 800);
+  }
+
   function seg(key, value, options) {
     return el('div', { class: 'seg' }, options.map(([v, label]) => el('button', {
       class: String(value) === String(v) ? 'on' : '',
@@ -521,6 +624,7 @@
   function settings() {
     const s = call('settings');
     const st = safe(() => call('status')) || {};
+    const b = safe(() => call('brain')) || { notes: [], fresh: {} };
     const rows = [
       ['Size', 'how big I am', seg('size', s.size, [[0.8, 'Small'], [1, 'Normal'], [1.25, 'Big']])],
       ['Chatter', 'how often I talk', seg('chatter', s.chatter, [[0, 'Quiet'], [1, 'Normal'], [2, 'Chatty']])],
@@ -530,10 +634,26 @@
       ['Updates', 'for apps with GitHub releases', seg('updates', s.updates, [['ask', 'Ask me'], ['auto', 'Automatic'], ['off', 'Off']])],
       ['Quote sources', 'show where a quote is from', seg('showSources', s.showSources, [[true, 'On'], [false, 'Off']])],
       ['On screen', '', seg('visible', s.visible, [[true, 'Out'], [false, 'In the den']])],
+      ['Grok brain', b.hasKey ? 'key ' + b.hint : 'needs an xAI API key', seg('brain', s.brain, [[true, 'On'], [false, 'Off']])],
+      ['Brain model', 'Fastest is also cheapest', seg('brainModel', s.brainModel, MODELS)],
+      ['Daily limit', 'Grok spending per day', seg('brainCap', s.brainCap, [[0.25, '$0.25'], [1, '$1'], [3, '$3'], [10, '$10']])],
+      ['Fresh lines', (b.fresh.count ? b.fresh.count + ' from Grok' : 'new things to say') + ', daily', seg('freshLines', s.freshLines, [[true, 'On'], [false, 'Off']])],
     ].map(([label, small, ctl]) => el('div', { class: 'row' }, el('div', { class: 'label' }, label, small ? el('small', {}, small) : null), ctl));
     const p = st.permissions || {};
     const missing = Object.entries(p).filter(([, v]) => !v).map(([k]) => k);
     return rows.concat([
+      el('div', { class: 'buttons' },
+        el('button', { onclick: () => { keyForm = true; show('talk'); } }, b.hasKey ? 'Change API key' : 'Add API key'),
+        b.hasKey && el('button', { 'data-k': 'forget-key', onclick: () => confirmThen('Remove the API key?',
+          'He goes back to his built-in lines until you add a key again.', 'Remove key',
+          () => { safe(() => call('brainForgetKey'), 'Key removed.'); render(); }) }, 'Remove API key'),
+        b.notes.length > 0 && el('button', { 'data-k': 'forget-notes', onclick: () => confirmThen('Forget what he remembers?',
+          b.notes.map((n) => n.text).join('  /  '), 'Forget',
+          () => { safe(() => call('brainClear', 'notes'), 'Forgotten.'); render(); }) }, 'Forget what he remembers (' + b.notes.length + ')'),
+        b.hasKey && s.freshLines && el('button', { onclick: () => {
+          const r = safe(() => call('brainLines'));
+          if (r != null) toast(r ? 'Writing some new lines. They take a couple of minutes.' : 'Already writing some, or the daily limit is reached.');
+        } }, 'New lines now')),
       el('div', { class: 'buttons' },
         el('button', { onclick: () => safe(() => call('summon', 'top'), 'Coming up!') }, 'Call me to the top screen'),
         el('button', { onclick: () => safe(() => call('summon', 'bottom'), 'On my way down!') }, 'Call me to the bottom screen'),
@@ -555,6 +675,8 @@
     return [el('div', { class: 'prose' },
       el('p', {}, "Coronamon lives on your Thor and looks after the apps Grok Build makes for it. He watches installs, updates and crashes, keeps reports, and wanders between the screens when he isn't busy."),
       el('p', {}, 'Tap him to say hi, hold to pet him, drag to carry him, or fling him at the other screen. He moves out of the way of games and videos.'),
+      el('p', {}, 'With an xAI API key he gets a Grok brain: chat with him in the Talk tab (or with ', el('code', {}, 'coro brain ask'),
+        ' from the Mac). He can check on apps, bugs and updates for you, and writes a fresh batch of lines about once a day. Anything that changes the Thor waits for your OK.'),
       el('h3', {}, 'Where his words come from'),
       src,
       el('p', {}, 'Add your own in ', el('code', {}, 'Coronamon/lines.json'), ' on the Thor\'s storage.'),
@@ -563,7 +685,7 @@
       el('p', { style: 'color:var(--muted)' }, 'Version ' + (st.version || '?') + '. Coronamon and Digimon belong to Bandai Namco; this is a fan-made companion for personal use.'))];
   }
 
-  const VIEWS = { apps, activity, bugs, grok, inbox, settings, about };
+  const VIEWS = { apps, talk, activity, bugs, grok, inbox, settings, about };
 
   function overlay() {
     return !document.getElementById('modal').hidden || !document.getElementById('confirm').hidden || !!report;
@@ -581,7 +703,7 @@
     } catch (e) {
       view.append(el('div', { class: 'empty' }, e.message));
     }
-    view.scrollTop = scroll;
+    view.scrollTop = current === 'talk' && !keyForm ? view.scrollHeight : scroll;
     document.getElementById('title').textContent = TITLES[current];
     document.getElementById('quip').textContent = QUIPS[current];
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.tab === current);
@@ -596,6 +718,8 @@
       const d = view.querySelector('.diag');
       if (d) d.scrollIntoView({ block: 'start' });
     }
+    clearTimeout(talkPoll);
+    if (current === 'talk') watchTalk();
     clearTimeout(grokPoll);
     if (current === 'grok' && grokBusy) {
       grokPoll = setTimeout(function tick() {
@@ -607,6 +731,7 @@
   }
 
   function show(tab) {
+    if (tab !== 'talk') keyForm = false;
     current = tab;
     document.getElementById('view').scrollTop = 0;
     if (tab === 'grok') freshen();
@@ -618,7 +743,7 @@
   function focusables() {
     const modal = document.getElementById('modal'), form = document.getElementById('report'), ask = document.getElementById('confirm');
     const root = !ask.hidden ? ask : !modal.hidden ? modal : !form.hidden ? form : document;
-    return [...root.querySelectorAll('button:not([disabled]), textarea')].filter((b) => b.offsetParent !== null);
+    return [...root.querySelectorAll('button:not([disabled]), textarea, input')].filter((b) => b.offsetParent !== null);
   }
 
   /** What the d-pad scrolls when there's nothing more to focus that way. */
@@ -660,7 +785,7 @@
 
   document.addEventListener('keydown', (e) => {
     const dirs = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
-    const typing = document.activeElement && document.activeElement.tagName === 'TEXTAREA';
+    const typing = document.activeElement && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName);
     if (dirs[e.key] && !(typing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) {
       e.preventDefault();
       move(dirs[e.key]);
@@ -714,5 +839,5 @@
   const first = document.querySelector('.tab.active');
   if (first) first.focus();
   den.checkReport();
-  setInterval(() => { if (!overlay() && current !== 'settings') render(); }, 15000);
+  setInterval(() => { if (!overlay() && current !== 'settings' && current !== 'talk') render(); }, 15000);
 })();

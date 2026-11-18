@@ -212,6 +212,7 @@ SECRET_PATTERNS = [
     (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), "a Slack token"),
     (re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"), "a Google API key"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "a login token (JWT)"),
+    (re.compile(r"\bxai-[A-Za-z0-9_-]{40,}"), "an xAI API key"),
 ]
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 URL = re.compile(r"\b(https?|wss?|content|file|intent)://([^/\s'\"<>()]*)([^\s'\"<>()]*)")

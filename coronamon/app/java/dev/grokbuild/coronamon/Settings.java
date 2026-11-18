@@ -49,6 +49,26 @@ final class Settings {
         return p.getBoolean("showSources", true);
     }
 
+    /** His Grok brain (Mind); it also needs an API key. */
+    boolean brain() {
+        return p.getBoolean("brain", true);
+    }
+
+    String brainModel() {
+        String m = p.getString("brainModel", Mind.MODELS[0]);
+        for (String ok : Mind.MODELS) if (ok.equals(m)) return m;
+        return Mind.MODELS[0];
+    }
+
+    /** US dollars of Grok a day before he goes back to his built-in lines. */
+    float brainCap() {
+        return p.getFloat("brainCap", 1f);
+    }
+
+    boolean freshLines() {
+        return p.getBoolean("freshLines", true);
+    }
+
     /** Returns false for an unknown key or a bad value. */
     boolean set(String key, String value) {
         if (key == null || value == null) return false;
@@ -68,7 +88,16 @@ final class Settings {
                 case "nightSleep":
                 case "visible":
                 case "showSources":
+                case "brain":
+                case "freshLines":
                     e.putBoolean(key, Boolean.parseBoolean(value));
+                    break;
+                case "brainModel":
+                    if (!java.util.Arrays.asList(Mind.MODELS).contains(value)) return false;
+                    e.putString("brainModel", value);
+                    break;
+                case "brainCap":
+                    e.putFloat("brainCap", Math.max(0.1f, Math.min(50f, Float.parseFloat(value))));
                     break;
                 case "screen":
                     if (!value.matches("auto|top|bottom")) return false;
@@ -90,6 +119,7 @@ final class Settings {
 
     JSONObject toJson() {
         return Util.obj("size", size(), "chatter", chatter(), "games", games(), "nightSleep", nightSleep(),
-                "screen", screenPref(), "visible", visible(), "updates", updates(), "showSources", showSources());
+                "screen", screenPref(), "visible", visible(), "updates", updates(), "showSources", showSources(),
+                "brain", brain(), "brainModel", brainModel(), "brainCap", brainCap(), "freshLines", freshLines());
     }
 }

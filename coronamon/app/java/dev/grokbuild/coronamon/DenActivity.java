@@ -350,6 +350,55 @@ public final class DenActivity extends Activity {
             return call(s -> s.diag.start());
         }
 
+        // ---- his Grok brain: the Talk tab ----
+
+        @JavascriptInterface
+        public String brain() {
+            return call(s -> s.mind.forDen());
+        }
+
+        @JavascriptInterface
+        public String brainSend(String text) {
+            return call(s -> s.mind.ask(text, "den"));
+        }
+
+        @JavascriptInterface
+        public String brainAction(String msgId, String actionId, boolean yes) {
+            return call(s -> s.mind.confirm(msgId, actionId, yes));
+        }
+
+        /** Takes a pasted API key into GrokKey. The key never comes back out to the page. */
+        @JavascriptInterface
+        public String brainKey(String key) {
+            return call(s -> {
+                GrokKey.set(s, key);
+                s.mind.keySet();
+                return GrokKey.hint(s);
+            });
+        }
+
+        @JavascriptInterface
+        public String brainForgetKey() {
+            return call(s -> {
+                GrokKey.clear(s);
+                s.mind.keyCleared();
+                return true;
+            });
+        }
+
+        @JavascriptInterface
+        public String brainClear(String what) {
+            return call(s -> {
+                s.mind.clear(what);
+                return true;
+            });
+        }
+
+        @JavascriptInterface
+        public String brainLines() {
+            return call(s -> s.mind.refreshLines());
+        }
+
         // ---- bugs and problem reports ----
 
         @JavascriptInterface

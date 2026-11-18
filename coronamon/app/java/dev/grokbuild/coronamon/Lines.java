@@ -31,8 +31,11 @@ final class Lines {
     }
 
     static final File USER_FILE = new File(Paths.ROOT, "lines.json");
+    /** How often a situation with fresh lines from his Grok brain uses one instead of a built-in line. */
+    private static final float FRESH_SHARE = 0.5f;
 
     private final Map<String, List<Line>> byKey = new HashMap<>();
+    private final Map<String, List<Line>> fresh = new HashMap<>();
     private final Map<String, ArrayDeque<String>> recent = new HashMap<>();
     private final Map<String, String> sources = new HashMap<>();
     private final Random rnd = new Random();
@@ -95,11 +98,37 @@ final class Lines {
         return l != null && !l.isEmpty();
     }
 
+    /** Lines his Grok brain wrote (Mind), by situation; they replace the last batch. */
+    void setFresh(Map<String, List<String>> lines) {
+        fresh.clear();
+        for (Map.Entry<String, List<String>> e : lines.entrySet()) {
+            List<Line> list = new ArrayList<>();
+            for (String t : e.getValue()) list.add(new Line("grok", t));
+            if (!list.isEmpty()) fresh.put(e.getKey(), list);
+        }
+    }
+
+    /** Built-in lines for a situation, original ones first, to show Grok his voice. */
+    List<String> examples(String key, int n) {
+        List<String> out = new ArrayList<>();
+        List<Line> list = byKey.get(key);
+        if (list == null) return out;
+        for (Line l : list) if (out.size() < n && l.src.isEmpty()) out.add(l.text);
+        for (Line l : list) if (out.size() < n && "ts".equals(l.src)) out.add(l.text);
+        return out;
+    }
+
     /** A random line for the situation with {app}, {version} and {msg} filled in, or null. */
     Line pick(String key, Map<String, String> vars) {
         List<Line> list = byKey.get(key);
+        List<Line> mine = fresh.get(key);
+        String seenKey = key;
+        if (mine != null && (list == null || list.isEmpty() || rnd.nextFloat() < FRESH_SHARE)) {
+            list = mine;
+            seenKey = "~" + key;
+        }
         if (list == null || list.isEmpty()) return null;
-        ArrayDeque<String> seen = recent.computeIfAbsent(key, k -> new ArrayDeque<>());
+        ArrayDeque<String> seen = recent.computeIfAbsent(seenKey, k -> new ArrayDeque<>());
         Line pick = null;
         for (int tries = 0; tries < 8; tries++) {
             Line l = list.get(rnd.nextInt(list.size()));

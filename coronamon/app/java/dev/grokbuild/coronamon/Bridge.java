@@ -45,7 +45,9 @@ public final class Bridge extends ContentProvider {
         JSONObject res;
         try {
             String a = b64 && arg != null ? decode(arg) : arg;
-            res = "diagnostics".equals(method) ? Diagnostics.forBridge(getContext()) : onMain(() -> handle(method, a, in, b64));
+            res = "diagnostics".equals(method) ? Diagnostics.forBridge(getContext())
+                    : "brain-ask".equals(method) ? Mind.forBridgeAsk(getContext(), a)
+                    : onMain(() -> handle(method, a, in, b64));
         } catch (Exception e) {
             Throwable c = e.getCause() != null ? e.getCause() : e;
             res = Util.obj("ok", false, "error", c.toString());
@@ -229,6 +231,34 @@ public final class Bridge extends ContentProvider {
             case "shizuku":
                 if ("request".equals(arg)) Shell.request();
                 return Util.obj("ok", true, "state", Shell.state());
+            case "brain": {
+                JSONObject d = s.mind.forDen();
+                JSONArray chat = d.optJSONArray("chat");
+                int n = (int) parseFloat(arg, 6);
+                JSONArray last = new JSONArray();
+                for (int i = Math.max(0, chat.length() - n); i < chat.length(); i++) last.put(chat.opt(i));
+                Util.put(d, "chat", last);
+                return ok(d);
+            }
+            case "brain-key": {
+                if ("clear".equals(arg)) {
+                    GrokKey.clear(s);
+                    s.mind.keyCleared();
+                    return Util.obj("ok", true, "hint", JSONObject.NULL);
+                }
+                GrokKey.set(s, str(in, "key", b64));
+                s.mind.keySet();
+                return Util.obj("ok", true, "hint", GrokKey.hint(s));
+            }
+            case "brain-action":
+                return Util.obj("ok", true, "action", s.mind.confirm(nz(str(in, "msg", b64)), nz(arg), "true".equals(str(in, "yes", b64))));
+            case "brain-lines":
+                if ("refresh".equals(arg)) return Util.obj("ok", true, "started", s.mind.refreshLines());
+                if ("show".equals(arg)) return Util.obj("ok", true, "lines", s.mind.freshLines());
+                return Util.obj("ok", true, "fresh", s.mind.forDen().optJSONObject("fresh"));
+            case "brain-clear":
+                s.mind.clear(arg == null ? "chat" : arg);
+                return Util.obj("ok", true);
             case "den": {
                 Intent i = new Intent(s, DenActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 int idx = s.stageIndexOf(arg == null ? "" : arg);

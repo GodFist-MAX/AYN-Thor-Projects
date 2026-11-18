@@ -319,6 +319,7 @@ final class Diagnostics {
             default:
                 out.put(finding("Grok Build", "info", "Hasn't heard from the Mac since Coronamon started.", null));
         }
+        out.put(s.mind.check());
         return out;
     }
 
