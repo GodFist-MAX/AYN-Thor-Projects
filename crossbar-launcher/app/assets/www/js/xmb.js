@@ -22,6 +22,11 @@ const XMB = {
     this.root = $('#xmb');
     this.bar = $('#bar');
     this.crumbs = $('#crumbs');
+    // Deep folders with long names would otherwise run under the status icons, whose width changes.
+    const status = $('#status');
+    new ResizeObserver(() => {
+      this.crumbs.style.maxWidth = status.offsetParent ? Math.max(300, status.offsetLeft - this.crumbs.offsetLeft - 40) + 'px' : '';
+    }).observe(status);
     this.initTouch();
   },
 
@@ -275,7 +280,7 @@ const XMB = {
       else this.layoutHidden(lv.col);
     }
     const parts = [this.category().label, ...this.stack.map(s => s.folder.label)];
-    const crumbs = parts.map((p, i) => `<span class="c${i === parts.length - 1 ? ' cur' : ''}">${esc(p)}</span>`).join('<span class="sep">›</span>');
+    const crumbs = parts.map((p, i) => `<span class="c${i === parts.length - 1 ? ' cur' : ''}${p.length > 16 ? ' long' : ''}">${esc(p)}</span>`).join('<span class="sep">›</span>');
     if (crumbs !== this.crumbsHtml) this.crumbs.innerHTML = this.crumbsHtml = crumbs;
   },
 

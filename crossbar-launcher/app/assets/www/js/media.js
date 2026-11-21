@@ -231,7 +231,7 @@ const VideoOv = {
   },
   load() {
     const v = this.list[this.i];
-    this.title.textContent = v.title;
+    this.title.textContent = videoTitle(v);
     this.v.src = `/media/video?id=${v.id}`;
     this.v.play().catch(() => {});
     this.poke();
@@ -241,7 +241,7 @@ const VideoOv = {
     const v = this.list[this.i];
     this.close(true);
     Api.log('video fallback to native player: ' + v.id);
-    Native.playVideoNative(String(v.id));
+    Native.playVideoNative(videoPlaylist(this.list, this.i));
   },
   close(silent) {
     if (!this.open_) return;
@@ -300,8 +300,8 @@ const VideoOv = {
       case 'r1': case 'next': return this.go(1);
       case 'options': {
         const v = this.list[this.i];
-        return Panels.options(v.title, [
-          { label: 'Play in Native Player', run: () => { this.close(true); Native.playVideoNative(String(v.id)); } },
+        return Panels.options(videoTitle(v), [
+          { label: 'Play in Native Player', run: () => { this.close(true); Native.playVideoNative(videoPlaylist(this.list, this.i)); } },
           { label: 'Restart', run: () => { this.v.currentTime = 0; this.v.play().catch(() => {}); } },
         ]);
       }

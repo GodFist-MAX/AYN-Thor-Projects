@@ -37,6 +37,13 @@ final class Screens {
         return null;
     }
 
+    /** Whether the top screen is on; an activity started there while it's off can't take the focus. */
+    static boolean topOn(Context c) {
+        DisplayManager dm = c.getSystemService(DisplayManager.class);
+        Display d = dm != null ? dm.getDisplay(Display.DEFAULT_DISPLAY) : null;
+        return d != null && d.getState() == Display.STATE_ON;
+    }
+
     static boolean bottomEnabled(Context c) {
         int s = c.getPackageManager().getComponentEnabledSetting(new ComponentName(c, BottomActivity.class));
         return s != PackageManager.COMPONENT_ENABLED_STATE_DISABLED;

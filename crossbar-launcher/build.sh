@@ -43,7 +43,13 @@ find "$OUT/classes" -name '*.class' > "$OUT/classes.txt"
 "$BT/d8" --release --min-api 33 --lib "$AJAR" --output "$OUT/dex" @"$OUT/classes.txt"
 ( cd "$OUT/dex" && zip -q -j "$OUT/unsigned.apk" classes.dex )
 
-"$BT/zipalign" -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
+# The native player's sound decoder (FFmpeg); stored uncompressed so it can load straight from the APK.
+bash tools/build_audio.sh >/dev/null
+mkdir -p "$OUT/native/lib/arm64-v8a"
+cp tools/ffmpeg-android/lib/arm64-v8a/libcbaudio.so "$OUT/native/lib/arm64-v8a/"
+( cd "$OUT/native" && zip -q -0 -r "$OUT/unsigned.apk" lib )
+
+"$BT/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 "$BT/apksigner" sign --ks "$KS" --ks-pass "file:$KSPASS" \
   --out "$OUT/CrossBar.apk" "$OUT/aligned.apk"
 "$BT/apksigner" verify "$OUT/CrossBar.apk"

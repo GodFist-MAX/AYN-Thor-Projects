@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -26,12 +27,17 @@ import android.widget.FrameLayout;
 /**
  * The bottom screen's home: a touch companion that follows the selection on the top screen.
  * Registered as SECONDARY_HOME, so the system starts it on the second display while CrossBar
- * is the default home. Controller input that lands here is passed to the top screen.
+ * is the default home. Controller input that lands here is passed to the top screen's menu,
+ * or, while a game or app covers the menu, the focus goes back up to it.
  */
 public class BottomActivity extends Activity {
     private FramePacer root;
     private WebView web;
     private final Handler h = new Handler(Looper.getMainLooper());
+    /** Whether this is the system's top resumed activity: this screen holds the system-wide key focus. */
+    private boolean topResumed;
+    private long focusReturnedAt;
+    private final Runnable refocus = this::returnFocus;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -48,7 +54,7 @@ public class BottomActivity extends Activity {
         BottomActivity old = App.I.bottom;
         App.I.bottom = this;
         if (old != null && old != this) old.finish();
-        setFocusable(App.I.topVisible);
+        updateFocusable();
     }
 
     void applyPerf() {
@@ -119,14 +125,42 @@ public class BottomActivity extends Activity {
 
     /**
      * While a game runs on the top screen this window must not take input focus, or a touch on
-     * the bottom screen would leave the game without controller input. While the menu is up it
-     * stays focusable: an unfocusable home activity on the focused display swallows all keys.
+     * the bottom screen would leave the game without controller input. It stays focusable while
+     * the menu is up, and while this screen holds the system-wide focus anyway (the Thor's
+     * dual-screen panel was touched, Home was pressed down here, or CrossBar restarted): an
+     * unfocusable home activity on the focused display swallows all keys, and after 5 seconds
+     * the system reports CrossBar as not responding.
      */
-    void setFocusable(boolean on) {
+    void updateFocusable() {
         h.post(() -> {
-            if (on) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+            if (App.I.topVisible || topResumed) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
             else getWindow().addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
         });
+    }
+
+    /**
+     * Gives the system-wide focus back to the game or app covering the menu, once this screen
+     * holds it and nothing else down here takes keys. Not while the top screen is off: an
+     * activity started there then can't take the focus, and keys would wait for it instead.
+     */
+    private void returnFocus() {
+        if (App.I.topVisible || !topResumed || !hasWindowFocus() || !Screens.topOn(this)) return;
+        long now = SystemClock.uptimeMillis();
+        if (now - focusReturnedAt < 1000) return;
+        focusReturnedAt = now;
+        try {
+            startActivity(new Intent(this, FocusActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_NO_ANIMATION | Intent.FLAG_ACTIVITY_NO_USER_ACTION), Screens.top());
+        } catch (Exception e) {
+            Log.w(App.TAG, "could not give the top screen its focus back: " + e);
+        }
+    }
+
+    @Override
+    public void onTopResumedActivityChanged(boolean top) {
+        super.onTopResumedActivityChanged(top);
+        topResumed = top;
+        updateFocusable();
     }
 
     @Override
@@ -140,6 +174,12 @@ public class BottomActivity extends Activity {
         App.I.bottomFocus = true;
         MainActivity m = App.I.top;
         if (m != null && App.I.topVisible && m.handleKey(e)) return true;
+        int code = e.getKeyCode();
+        if (!App.I.topVisible && MainActivity.map(code) != null && !KeyEvent.isMediaSessionKey(code)) {
+            // The controller belongs to the game or app up there; it mustn't press anything on this page.
+            if (e.getAction() == KeyEvent.ACTION_DOWN) returnFocus();
+            return true;
+        }
         return super.dispatchKeyEvent(e);
     }
 
@@ -193,7 +233,10 @@ public class BottomActivity extends Activity {
     @Override
     public void onWindowFocusChanged(boolean focus) {
         super.onWindowFocusChanged(focus);
-        if (focus) hideSystemUi();
+        if (!focus) return;
+        hideSystemUi();
+        h.removeCallbacks(refocus);
+        h.postDelayed(refocus, 300);
     }
 
     private void hideSystemUi() {

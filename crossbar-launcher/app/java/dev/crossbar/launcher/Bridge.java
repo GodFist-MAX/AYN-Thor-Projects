@@ -10,6 +10,7 @@ import android.provider.Settings;
 import android.view.Display;
 import android.webkit.JavascriptInterface;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Methods the web UI calls through window.Native. Each returns "" on success or a message. */
@@ -212,17 +213,27 @@ final class Bridge {
         return ok(NotifListener.control(act, pkg, cmd));
     }
 
+    /** Plays in CrossBar's own player: {"i": index, "items": [{id, title, sub}]}, or one video's id. */
     @JavascriptInterface
-    public void playVideoNative(String id) {
-        long vid;
+    public void playVideoNative(String arg) {
+        Intent i = new Intent(act, PlayerActivity.class);
         try {
-            vid = Long.parseLong(id);
-        } catch (NumberFormatException e) {
+            if (arg != null && arg.startsWith("{")) {
+                JSONObject o = new JSONObject(arg);
+                JSONArray items = o.getJSONArray("items");
+                int at = Math.max(0, Math.min(o.optInt("i"), items.length() - 1));
+                i.setData(MediaRepo.uri("video", items.getJSONObject(at).getLong("id")))
+                        .putExtra(PlayerActivity.EXTRA_LIST, items.toString())
+                        .putExtra(PlayerActivity.EXTRA_INDEX, at);
+            } else {
+                i.setData(MediaRepo.uri("video", Long.parseLong(arg)));
+            }
+        } catch (Exception e) {
             return;
         }
         app.opening(true, false);
         if (MusicService.playing()) MusicService.command(act, "pause", null);
-        act.startActivity(new Intent(act, PlayerActivity.class).setData(MediaRepo.uri("video", vid)));
+        act.startActivity(i);
     }
 
     /** The web video player started ("" when it paused or closed), for the joystick lights. */

@@ -371,16 +371,114 @@ function musicCat() {
 }
 
 // ---------- Video ----------
+const VIDEO_TAGS = '2160p|1080p|720p|576p|480p|4k|uhd|x26[45]|h\\.?26[45]|hevc|avc|blu-?ray|bdrip|brrip|web-?dl|web-?rip|hdtv|dvdrip|remux|10bit|aac|e?ac-?3|dts|ddp|atmos';
+// The first bracket holding release details, and everything after it: "Title [WEBDL-1080p][AC3 2.0]-group".
+const VIDEO_TAG_TAIL = new RegExp(`\\s*[\\[(][^\\])]*\\b(${VIDEO_TAGS})\\b[^\\])]*[\\])].*$`, 'i');
+// The same for dotted scene names once the dots are spaces: "Show S01E01 Title 1080p WEB-DL x264-GROUP".
+const VIDEO_TAG_WORDS = new RegExp(`\\s+(${VIDEO_TAGS})\\b.*$`, 'i');
+const SEASON_DIR = /^(season|series|specials?|extras?|featurettes?|bonus|disc|volume)\b/i;
+const naturalOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare;
+
+/* A folder name without release details: "Batman Beyond (1999) Season 1-3 (1080p BluRay x265 Ghost)" -> "Batman Beyond (1999) Season 1-3". */
+function videoDirName(name) {
+  return name.replace(VIDEO_TAG_TAIL, '').trim() || name;
+}
+/* A file's title without release details, episodes as "S01E07 · Title". */
+function videoTitle(v) {
+  const raw = String(v.title || v.file || 'Video').trim();
+  let t = raw;
+  const dotted = !/\s/.test(t) && /[._]/.test(t);
+  if (dotted) t = t.replace(/[._]+/g, ' ');
+  t = t.replace(VIDEO_TAG_TAIL, '');
+  if (dotted) t = t.replace(VIDEO_TAG_WORDS, '');
+  t = t.trim() || raw;
+  const m = t.match(/\bS(\d{1,2})[ ._-]?E(\d{1,3})\b/i);
+  if (!m) return t;
+  const ep = `S${m[1].padStart(2, '0')}E${m[2].padStart(2, '0')}`;
+  const name = t.slice(m.index + m[0].length).replace(/^[\s\-–—:·.]+/, '').trim();
+  const show = t.slice(0, m.index).replace(/[\s\-–—:·.]+$/, '').trim();
+  return name ? `${ep} · ${name}` : [show, ep].filter(Boolean).join(' ');
+}
+/* Where a video sits, for its subtitle: the show and season for season folders, else the folder. */
+function videoPlace(v) {
+  const dirs = String(v.path || '').split('/').filter(Boolean).map(videoDirName);
+  const n = dirs.length;
+  if (!n) return v.folder || 'Videos';
+  return n > 1 && SEASON_DIR.test(dirs[n - 1]) ? `${dirs[n - 2]} · ${dirs[n - 1]}` : dirs[n - 1];
+}
+function videoPlaylist(list, i) {
+  return JSON.stringify({ i, items: list.map(v => ({ id: v.id, title: videoTitle(v), sub: videoPlace(v) })) });
+}
+/* CrossBar's own player: plays what the Thor's decoders and FFmpeg can (E-AC3 and DTS sound too), with picture-in-picture. */
+function playVideos(list, i) {
+  Sound.play('ok');
+  Companion.launched(XMB.current());
+  Native.playVideoNative(videoPlaylist(list, i));
+}
+/* Where the native player stopped in this video (ms), from the play history; 0 if finished or unwatched. */
+function videoResume(v) {
+  return ((Model.H.history || {})['video:' + v.id] || {}).pos || 0;
+}
 function videoItem(v, list, i) {
   const thumb = `/img/thumb?type=video&id=${v.id}&s=480`;
+  const label = videoTitle(v), place = videoPlace(v);
   return mk({
-    kind: 'video', id: 'video:' + v.id, label: v.title, sub: `${Fmt.dur(v.duration)} · ${v.folder || 'Videos'}`, video: v,
+    kind: 'video', id: 'video:' + v.id, label, video: v,
+    get sub() {
+      const r = videoResume(v);
+      return [r ? `Resume at ${Fmt.dur(r)} of ${Fmt.dur(v.duration)}` : Fmt.dur(v.duration), place, v.sd ? 'SD card' : ''].filter(Boolean).join(' · ');
+    },
     icon: { img: thumb, shape: 'wide', style: 'tile', fallback: 'film' },
     heroes: [`/img/thumb?type=video&id=${v.id}&s=1280`],
-    detail: { title: v.title, meta: [Fmt.dur(v.duration), v.width ? `${v.width}×${v.height}` : '', Fmt.size(v.size), v.folder].filter(Boolean), action: 'Play' },
-    run: () => Media.playVideo(list, i),
-    options: () => [{ label: 'Play', run: () => Media.playVideo(list, i) }, { label: 'Play in Native Player', run: () => Native.playVideoNative(String(v.id)) }],
+    get detail() {
+      return { title: label, meta: [Fmt.dur(v.duration), v.width ? `${v.width}×${v.height}` : '', Fmt.size(v.size), place, v.sd ? 'SD card' : 'Internal storage'].filter(Boolean), desc: v.file, action: videoResume(v) ? 'Resume' : 'Play' };
+    },
+    run: () => playVideos(list, i),
+    options: () => [
+      { label: videoResume(v) ? 'Resume' : 'Play', run: () => playVideos(list, i) },
+      { label: 'Play in Menu Player', run: () => Media.playVideo(list, i) },
+    ],
   });
+}
+/* The videos as the folders they're in. Internal storage and the SD card merge: Movies/<Show> on either is one folder. */
+function videoTree(videos) {
+  const root = { name: '', dirs: new Map(), files: [] };
+  for (const v of videos) {
+    let node = root;
+    for (const seg of String(v.path || '').split('/').filter(Boolean)) {
+      const k = seg.toLowerCase();
+      if (!node.dirs.has(k)) node.dirs.set(k, { name: seg, dirs: new Map(), files: [] });
+      node = node.dirs.get(k);
+    }
+    node.files.push(v);
+  }
+  return root;
+}
+function videoTreeStats(node) {
+  let n = node.files.length, sd = node.files.filter(v => v.sd).length;
+  for (const d of node.dirs.values()) {
+    const s = videoTreeStats(d);
+    n += s.n;
+    sd += s.sd;
+  }
+  return { n, sd };
+}
+function videoFolderItems(node, path) {
+  const dirs = [...node.dirs.values()].sort((a, b) => naturalOrder(a.name, b.name));
+  const files = node.files.slice().sort((a, b) => naturalOrder(a.file || a.title, b.file || b.title));
+  return [
+    ...dirs.map(d => {
+      const p = path + d.name + '/';
+      const s = videoTreeStats(d);
+      const where = s.sd === s.n ? 'SD card' : s.sd ? 'Internal storage + SD card' : '';
+      return folderItem(videoDirName(d.name), 'folder', {
+        id: 'vdir:' + p, sub: [d.dirs.size ? Fmt.plural(d.dirs.size, 'folder') : '', Fmt.plural(s.n, 'video'), where].filter(Boolean).join(' · '),
+        detail: { title: videoDirName(d.name), meta: [Fmt.plural(s.n, 'video'), where].filter(Boolean) },
+        load: async () => videoFolderItems(d, p),
+      });
+    }),
+    ...files.map((v, i) => videoItem(v, files, i)),
+  ];
 }
 function videoCat() {
   const H = Model.H;
@@ -389,10 +487,8 @@ function videoCat() {
   if (n) {
     items.push(folderItem('All Videos', 'video', { id: 'video:all', sub: Fmt.plural(n, 'video'), load: async () => { const v = await Model.videos(); return v.map((x, i) => videoItem(x, v, i)); } }));
     items.push(folderItem('Folders', 'folder', {
-      id: 'video:folders', sub: 'Videos grouped by folder',
-      load: async () => groupBy(await Model.videos(), 'folder').map(([f, list]) => folderItem(f, 'folder', {
-        id: 'vfolder:' + f, sub: Fmt.plural(list.length, 'video'), children: list.map((x, i) => videoItem(x, list, i)),
-      })),
+      id: 'video:folders', sub: 'Internal storage and SD card, folder by folder',
+      load: async () => videoFolderItems(videoTree(await Model.videos()), ''),
     }));
   } else {
     items.push(infoItem('No videos on this device', 'Copy videos into the Movies folder on the Thor', 'video'));

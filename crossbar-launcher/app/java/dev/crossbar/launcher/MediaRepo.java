@@ -12,6 +12,8 @@ import android.util.Size;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.Locale;
+
 /** Music, videos and photos from the device's media library. */
 final class MediaRepo {
     private final App app;
@@ -70,19 +72,33 @@ final class MediaRepo {
         return out;
     }
 
+    /** Clips inside game files (Switch romfs and exefs dumps, Atmosphere mods) and app-private folders. */
+    private static boolean gameData(String rel) {
+        if (rel == null) return false;
+        String r = rel.toLowerCase(Locale.ROOT);
+        return r.startsWith("android/") || r.startsWith("atmosphere/") || r.startsWith("romfs/")
+                || r.contains("/romfs/") || r.contains("/exefs/");
+    }
+
+    /** Every video on internal storage and the SD card; "path" is its folder there, like Movies/Show/Season 1/. */
     JSONArray videos() {
         JSONArray out = new JSONArray();
         String[] proj = {MediaStore.Video.Media._ID, MediaStore.Video.Media.TITLE, MediaStore.Video.Media.DISPLAY_NAME,
                 MediaStore.Video.Media.DURATION, MediaStore.Video.Media.WIDTH, MediaStore.Video.Media.HEIGHT,
                 MediaStore.Video.Media.BUCKET_DISPLAY_NAME, MediaStore.Video.Media.DATE_ADDED,
-                MediaStore.Video.Media.SIZE, MediaStore.Video.Media.MIME_TYPE};
+                MediaStore.Video.Media.SIZE, MediaStore.Video.Media.MIME_TYPE,
+                MediaStore.Video.Media.RELATIVE_PATH, MediaStore.Video.Media.VOLUME_NAME};
         try (Cursor c = cr.query(collection("video"), proj, null, null, MediaStore.Video.Media.DATE_ADDED + " DESC")) {
             while (c != null && c.moveToNext()) {
+                String rel = c.getString(10);
+                if (gameData(rel)) continue;
                 String title = c.getString(1);
                 if (title == null || title.isEmpty()) title = Util.baseName(c.getString(2));
                 out.put(Util.obj("id", c.getLong(0), "title", title, "file", c.getString(2),
                         "duration", c.getLong(3), "width", c.getInt(4), "height", c.getInt(5),
-                        "folder", c.getString(6), "added", c.getLong(7), "size", c.getLong(8), "mime", c.getString(9)));
+                        "folder", c.getString(6), "added", c.getLong(7), "size", c.getLong(8), "mime", c.getString(9),
+                        "path", rel == null ? "" : rel,
+                        "sd", !MediaStore.VOLUME_EXTERNAL_PRIMARY.equals(c.getString(11))));
             }
         } catch (Exception ignored) {
         }

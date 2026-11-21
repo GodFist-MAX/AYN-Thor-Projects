@@ -164,4 +164,22 @@ final class Store {
     synchronized JSONObject history() {
         return Util.copy(history);
     }
+
+    /** Where the user stopped a library video (ms); 0 when it was finished or barely started. */
+    synchronized long videoPosition(long id) {
+        JSONObject h = history.optJSONObject("video:" + id);
+        return h == null ? 0 : h.optLong("pos");
+    }
+
+    synchronized void saveVideoPosition(long id, long ms) {
+        String key = "video:" + id;
+        JSONObject h = history.optJSONObject(key);
+        if (h == null && ms <= 0) return;
+        if (h == null) h = new JSONObject();
+        else if (h.has("pos") && h.optLong("pos") == ms) return;
+        Util.put(h, "pos", ms);
+        Util.put(h, "last", System.currentTimeMillis());
+        Util.put(history, key, h);
+        Util.writeText(historyFile, history.toString());
+    }
 }

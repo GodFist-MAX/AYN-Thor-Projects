@@ -161,7 +161,7 @@ function overlayVM() {
   if (o === MusicOv) return { type: 'music' };
   if (o === VideoOv) {
     const v = VideoOv.list[VideoOv.i] || {}, e = VideoOv.v;
-    return { type: 'video', title: v.title || '', id: v.id, i: VideoOv.i, n: VideoOv.list.length,
+    return { type: 'video', title: v.title ? videoTitle(v) : '', id: v.id, i: VideoOv.i, n: VideoOv.list.length,
       paused: e.paused, pos: Math.round(e.currentTime || 0), dur: isFinite(e.duration) ? Math.round(e.duration) : 0 };
   }
   if (o === PhotoOv) {

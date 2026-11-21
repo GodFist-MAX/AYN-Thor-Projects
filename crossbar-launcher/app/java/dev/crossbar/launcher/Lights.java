@@ -183,7 +183,8 @@ final class Lights {
             while (ev.hasNextEvent()) {
                 ev.getNextEvent(e);
                 if (e.getEventType() == UsageEvents.Event.ACTIVITY_RESUMED
-                        && !BottomActivity.class.getName().equals(e.getClassName())) front = e.getPackageName();
+                        && !BottomActivity.class.getName().equals(e.getClassName())
+                        && !FocusActivity.class.getName().equals(e.getClassName())) front = e.getPackageName();
             }
             eventsFrom = now - 2000; // events can be recorded a moment late
         } catch (Exception ignored) {

@@ -68,10 +68,25 @@
         </activity>
 
         <activity
+            android:name=".FocusActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:taskAffinity="dev.crossbar.launcher.focus"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale" />
+
+        <!-- Its own task, so picture-in-picture takes only the player and leaves the menu (the home task) behind it. -->
+        <activity
             android:name=".PlayerActivity"
             android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="dev.crossbar.launcher.player"
+            android:excludeFromRecents="true"
+            android:autoRemoveFromRecents="true"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation" />
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale" />
 
         <service
             android:name=".MusicService"

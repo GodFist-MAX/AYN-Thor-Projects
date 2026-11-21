@@ -5,12 +5,14 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.ContentObserver;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.MediaStore;
 import android.util.Log;
 import android.view.Display;
 import android.view.InputDevice;
@@ -47,6 +49,17 @@ public class MainActivity extends Activity {
     private long refocusAt;
     private boolean refocusing;
     private final Handler h = new Handler(Looper.getMainLooper());
+    private final Runnable videosChanged = () -> {
+        if (resumed) js("window.CB&&CB.reload(true)");
+    };
+    /** Videos came or went (an SD card mounted, files copied over USB); the media scan sends a burst of these. */
+    private final ContentObserver videoObserver = new ContentObserver(h) {
+        @Override
+        public void onChange(boolean self) {
+            h.removeCallbacks(videosChanged);
+            h.postDelayed(videosChanged, 3000);
+        }
+    };
     private String stickDir;
     private long lastDpadKey;
     private final Runnable stickRepeat = new Runnable() {
@@ -71,6 +84,7 @@ public class MainActivity extends Activity {
         createWebView();
         hideSystemUi();
         requestRuntimePermissions();
+        getContentResolver().registerContentObserver(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, videoObserver);
     }
 
     void applyPerf() {
@@ -288,7 +302,7 @@ public class MainActivity extends Activity {
         App.I.topVisible = on;
         BottomActivity b = App.I.bottom;
         if (b == null) return;
-        b.setFocusable(on);
+        b.updateFocusable();
         b.js("window.Bottom&&Bottom.setTopVisible(" + on + ")");
     }
 
@@ -416,6 +430,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        getContentResolver().unregisterContentObserver(videoObserver);
         if (App.I.top == this) App.I.top = null;
         if (web != null) web.destroy();
         super.onDestroy();
