@@ -23,7 +23,7 @@ Commits are in the order the projects were last updated, and each is dated to wh
 - **2026-11-15:** checks in with Grok Build each time the Thor is plugged in and hands new bugs to automatic fix runs
 - **2026-11-16:** Coronamon: adds a Grok Build page to the Den with buttons to check status, pause or resume automatic runs, turn them off or on, stop the cu…; Downloads: save episodes on the Thor and watch them offline; Updates install on the Thor again
 - **2026-11-18:** Coronamon gets a Grok brain: chat in the Den's Talk tab, plus fresh lines every day
-- **2026-11-21:** CrossBar: video › Folders now shows the real folder tree, with internal storage and the SD card merged (show and season folders, episodes i…; AniDeck 2.0: a native app on Aniyomi extensions, with its own player and offline downloads; AniDeck: Re:ANIME (reanime.cz) as a recommended source, ready-made MKV downloads, sound in separate-audio downloads, and intro marks offline
+- **2026-11-21:** CrossBar: video › Folders now shows the real folder tree, with internal storage and the SD card merged (show and season folders, episodes i…; AniDeck 2.0: a native app on Aniyomi extensions, with its own player and offline downloads; AniDeck: Re:ANIME (reanime.cz) as a recommended source, ready-made MKV downloads, sound in separate-audio downloads, and intro marks offline; no more gray haze over the bottom screen
 
 ## Building
 

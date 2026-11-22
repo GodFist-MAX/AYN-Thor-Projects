@@ -69,6 +69,7 @@ public class BottomActivity extends Activity {
         }
         web = new WebView(this);
         web.setBackgroundColor(Color.BLACK);
+        web.setDefaultFocusHighlightEnabled(false);
         web.setVerticalScrollBarEnabled(false);
         web.setHorizontalScrollBarEnabled(false);
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
