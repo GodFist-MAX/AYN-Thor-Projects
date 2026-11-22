@@ -15,6 +15,7 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
@@ -23,10 +24,11 @@ import java.util.Set;
  * episodes, saved shows and the AniList Watching list, read from the Thor so it works offline. call("feed")
  * returns {"v":1,"sections":[{title, style, items:[{title, sub, img, progress, at, open}]}]}, where "open" holds
  * the extras for AniDeck's launch intent. Covers are at content://dev.anideck.app.feed/cover/{name}.
- * Only CrossBar (and adb, for testing) may read it.
+ * call("recent") lists the downloads you've played for Coronamon's TV (see recent()). Only CrossBar,
+ * Coronamon and adb (for testing) may read it.
  */
 public final class Feed extends ContentProvider {
-    private static final Set<String> CALLERS = Set.of("dev.crossbar.launcher");
+    private static final Set<String> CALLERS = Set.of("dev.crossbar.launcher", "dev.grokbuild.coronamon");
     private static final int SHELL_UID = 2000;
 
     @Override
@@ -39,16 +41,54 @@ public final class Feed extends ContentProvider {
         if (uid == SHELL_UID || uid == Process.myUid()) return;
         String[] pkgs = getContext().getPackageManager().getPackagesForUid(uid);
         if (pkgs != null) for (String p : pkgs) if (CALLERS.contains(p)) return;
-        throw new SecurityException("AniDeck's feed is only for CrossBar");
+        throw new SecurityException("AniDeck's feed is only for CrossBar and Coronamon");
     }
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
         check();
-        if (!"feed".equals(method)) return null;
+        JSONObject out;
+        if ("feed".equals(method)) out = feed();
+        else if ("recent".equals(method)) out = recent();
+        else return null;
         Bundle b = new Bundle();
-        b.putString("json", feed().toString());
+        b.putString("json", out.toString());
         return b;
+    }
+
+    /**
+     * Downloaded episodes you've played, most recent first: {"v":1,"items":[{key, title, sub, path, uri,
+     * pos, dur, at, playing, open}]}, pos and dur in ms. playing marks the one on the top screen now.
+     */
+    private JSONObject recent() {
+        String playing = "";
+        App app = App.I;
+        if (app != null && app.topVisible) {
+            try {
+                JSONObject st = new JSONObject(app.state);
+                if ("watch".equals(st.optString("page")) && st.optBoolean("offline")) playing = st.optString("download");
+            } catch (JSONException ignored) {
+            }
+        }
+        Downloads dl = Downloads.get(getContext());
+        JSONArray all = dl.finished();
+        List<JSONObject> played = new ArrayList<>();
+        for (int i = 0; i < all.length(); i++) {
+            JSONObject r = all.optJSONObject(i);
+            if (r != null && r.optLong("at") > 0) played.add(r);
+        }
+        played.sort((x, y) -> Long.compare(y.optLong("at"), x.optLong("at")));
+        JSONArray items = new JSONArray();
+        for (JSONObject r : played) {
+            if (items.length() >= 12) break;
+            String id = App.str(r, "id"), name = App.str(r, "epTitle");
+            String ep = "Episode " + VideoPlayer.numLabel(r.optDouble("ep"));
+            items.put(App.obj("key", "anideck:" + id, "title", App.str(r, "show"), "sub", name.isEmpty() ? ep : ep + " · " + name,
+                    "path", App.str(r, "file"), "uri", dl.uri(r).toString(), "pos", r.optLong("t") * 1000,
+                    "dur", r.optLong("d") * 1000, "at", r.optLong("at"), "playing", id.equals(playing),
+                    "open", App.obj(MainActivity.EXTRA_DOWNLOAD, id)));
+        }
+        return App.obj("v", 1, "items", items);
     }
 
     private JSONObject feed() {
