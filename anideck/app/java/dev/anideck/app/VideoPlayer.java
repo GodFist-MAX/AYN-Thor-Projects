@@ -693,7 +693,7 @@ final class VideoPlayer implements Player.Listener {
     }
 
     private JSONObject stampAt(double t) {
-        JSONArray ts = stream == null ? null : stream.optJSONArray("timestamps");
+        JSONArray ts = rec != null ? rec.optJSONArray("stamps") : stream == null ? null : stream.optJSONArray("timestamps");
         for (int i = 0; ts != null && i < ts.length(); i++) {
             JSONObject s = ts.optJSONObject(i);
             if (s != null && SKIPPABLE.contains(App.str(s, "type")) && t >= s.optDouble("start") - 0.5 && t < s.optDouble("end") - 1) return s;
@@ -924,6 +924,8 @@ final class VideoPlayer implements Player.Listener {
                     "show", App.str(rec, "show"), "anilistId", rec.optInt("a"), "ep", rec.optDouble("ep"), "epTitle", cleanTitle(App.str(rec, "epTitle")),
                     "hasPrev", hasPrev(), "hasNext", hasNext(), "quality", App.str(rec, "quality"),
                     "cover", coverName(App.str(rec, "key"), rec.optInt("a")));
+            JSONObject stamp = stampAt(t);
+            if (stamp != null) App.put(s, "stamp", stampName(stamp));
         } else {
             JSONObject ep = episode(), anime = item.optJSONObject("anime");
             String key = App.str(item, "key");
@@ -1054,7 +1056,7 @@ final class VideoPlayer implements Player.Listener {
             bar.setProgress((int) t);
             time.setText(clock(t) + " / " + clock(d));
         }
-        JSONObject stamp = rec == null ? stampAt(t) : null;
+        JSONObject stamp = stampAt(t);
         String sk = stamp == null ? "" : App.str(stamp, "type") + stamp.optDouble("start");
         if (stamp != null && App.I.setting("autoSkip") && !autoSkipped && "playing".equals(pstate) && !sk.equals(lastStamp)) {
             autoSkipped = true;

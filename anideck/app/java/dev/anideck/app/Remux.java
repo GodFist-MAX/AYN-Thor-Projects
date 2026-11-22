@@ -27,9 +27,9 @@ final class Remux {
 
     private static final class Track {
         MediaExtractor ex;
-        int index, out;
-        long offset, last = Long.MIN_VALUE, step;
-        boolean done;
+        int index, out, rate;
+        long offset, last = Long.MIN_VALUE, step, lastFrame = Long.MIN_VALUE;
+        boolean done, aac;
     }
 
     private Remux() {
@@ -57,6 +57,8 @@ final class Remux {
                     t.ex = ex;
                     t.index = i;
                     t.step = isVideo ? 33_000 : 21_000;
+                    t.aac = MediaFormat.MIMETYPE_AUDIO_AAC.equals(mime);
+                    t.rate = fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE) ? fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) : 0;
                     tracks.add(t);
                     ex.selectTrack(i);
                     if (isVideo) video = true;
@@ -106,7 +108,7 @@ final class Remux {
                 next.last = Math.max(next.last, time);
                 int flags = (ex.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0 ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
                 info.set(0, size, Math.max(0, time), flags);
-                mux.writeSampleData(next.out, buf, info);
+                if (!next.aac || !writeAdts(mux, next, buf, size, Math.max(0, time), info)) mux.writeSampleData(next.out, buf, info);
                 ex.advance();
                 if (first == Long.MIN_VALUE) first = time;
                 if (++n % 400 == 0 && progress != null && !progress.at(Math.min(1, (double) (time - first) / end))) {
@@ -129,6 +131,36 @@ final class Remux {
             }
             for (MediaExtractor ex : extractors) ex.release();
         }
+    }
+
+    /**
+     * MPEG-TS hands AAC over as ADTS frames, several to a sample; an MP4 needs each frame on its own without
+     * its header, or players can't decode it. False when the sample isn't a run of whole ADTS frames.
+     */
+    private static boolean writeAdts(MediaMuxer mux, Track t, ByteBuffer buf, int size, long time, MediaCodec.BufferInfo info) {
+        if (t.rate <= 0) return false;
+        List<int[]> frames = new ArrayList<>(); // {start, length, header length, raw blocks}
+        int pos = 0;
+        while (pos + 7 <= size) {
+            int b1 = buf.get(pos + 1) & 0xFF;
+            if ((buf.get(pos) & 0xFF) != 0xFF || (b1 & 0xF6) != 0xF0) return false;
+            int header = (b1 & 1) != 0 ? 7 : 9;
+            int len = ((buf.get(pos + 3) & 0x03) << 11) | ((buf.get(pos + 4) & 0xFF) << 3) | ((buf.get(pos + 5) & 0xFF) >>> 5);
+            if (len <= header || pos + len > size) return false;
+            frames.add(new int[] {pos, len, header, (buf.get(pos + 6) & 0x03) + 1});
+            pos += len;
+        }
+        if (pos != size || frames.isEmpty()) return false;
+        long samples = 0;
+        for (int[] f : frames) {
+            // The muxer wants each track's times to rise, and TS timestamps can jitter back a little.
+            long at = Math.max(time + samples * 1_000_000L / t.rate, t.lastFrame + 1);
+            info.set(f[0] + f[2], f[1] - f[2], at, MediaCodec.BUFFER_FLAG_KEY_FRAME);
+            mux.writeSampleData(t.out, buf, info);
+            t.lastFrame = at;
+            samples += 1024L * f[3];
+        }
+        return true;
     }
 
     private static Track find(List<Track> tracks, MediaExtractor ex, int index) {

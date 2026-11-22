@@ -11,6 +11,8 @@ import java.text.Normalizer;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * What both screens' pages ask the app for, as JSON in and {"ok": ...} or {"error": "..."} out. Sources,
@@ -123,12 +125,21 @@ final class Api {
 
     // ---- AniList matching ----
 
+    private static final Pattern ANILIST_COVER = Pattern.compile("anilistcdn/media/anime/cover/\\w+/b?x?(\\d+)-");
+
     /**
-     * Finds a show's AniList entry by its title on the source: {a, title, sure} when one stands out,
-     * plus the candidates to pick from. Links the show when sure.
+     * Finds a show's AniList entry: from its cover when the source uses AniList's (the id is in the file name),
+     * else by its title on the source. {a, title, sure} when one stands out, plus the candidates to pick from.
+     * Links the show when sure.
      */
     private static JSONObject match(JSONObject a) throws IOException {
         String title = App.str(a, "title"), key = App.str(a, "key");
+        Matcher cover = ANILIST_COVER.matcher(App.str(a, "cover"));
+        if (cover.find()) {
+            int id = Integer.parseInt(cover.group(1));
+            if (!key.isEmpty()) Shelf.get(App.I).link(key, id);
+            return App.obj("a", id, "title", "", "sure", true, "candidates", new JSONArray());
+        }
         JSONArray found = App.I.library.search(clean(title));
         if (found.length() == 0 && !clean(title).equals(title)) found = App.I.library.search(title);
         double best = 0;

@@ -83,6 +83,8 @@ final class Downloader {
     private Headers headers = new Headers.Builder().build();
     private long got, size, lastNote;
     private String quality = "";
+    /** The opening/ending marks of the source's preferred video, for a server that has none of its own. */
+    private JSONArray bestStamps;
 
     Downloader(Context c, JSONObject job, Listener listener) {
         app = c;
@@ -135,7 +137,10 @@ final class Downloader {
 
     /**
      * Videos closest to the download quality setting first, on the server that was playing when Download was
-     * pressed (else the one with the source's preferred video), then the other servers.
+     * pressed (else the one with the source's preferred video) and its kin, then the other servers. Kin are the
+     * server's own download file ("[Sub] HD-1 Download" for "[Sub] HD-1") and servers with the same tag ("[Sub] HD-2");
+     * among those, a ready-made file comes before a stream of the same quality, since it holds every audio and
+     * subtitle track.
      */
     private Iterable<JSONObject> candidates() throws IOException {
         JSONObject args = App.obj("source", App.str(job, "source"), "episode", job.optJSONObject("episode"));
@@ -150,6 +155,7 @@ final class Downloader {
         if (stream == null) throw new Failure(App.str(best, "error").isEmpty() ? "None of the servers gave a video" : App.str(best, "error"));
         JSONObject pick = job.optJSONObject("pick");
         String bestKey = App.str(stream, "key");
+        bestStamps = stream.optJSONArray("timestamps");
         int n = hosters == null ? 0 : hosters.length();
         int home = -1;
         for (int i = 0; pick != null && home < 0 && i < n; i++) {
@@ -157,21 +163,31 @@ final class Downloader {
         }
         for (int i = 0; home < 0 && i < n; i++) if (hasVideo(hosters.optJSONObject(i), bestKey)) home = i;
         int max = maxHeight();
+        String homeName = home < 0 ? "" : App.str(hosters.optJSONObject(home), "name");
+        // {hoster, video}: the playing server and its kin, then each other server's videos.
+        List<JSONObject[]> kin = new ArrayList<>(), others = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            JSONObject h = hosters.optJSONObject(i);
+            JSONArray vs = h == null ? null : h.optJSONArray("videos");
+            List<JSONObject[]> own = new ArrayList<>();
+            for (int k = 0; vs != null && k < vs.length(); k++) if (vs.optJSONObject(k) != null) own.add(new JSONObject[] {h, vs.optJSONObject(k)});
+            boolean near = i == home || kinOf(homeName, App.str(h, "name"));
+            // Stable, so videos that fit equally well keep the source's order.
+            if (!near) own.sort((x, y) -> fit(y[1], max) - fit(x[1], max));
+            (near ? kin : others).addAll(own);
+        }
+        kin.sort((x, y) -> {
+            int c = fit(y[1], max) - fit(x[1], max);
+            if (c == 0) c = Boolean.compare(!isFile(App.str(x[0], "name")), !isFile(App.str(y[0], "name")));
+            if (c == 0) c = Boolean.compare(!ownOf(homeName, App.str(x[0], "name")), !ownOf(homeName, App.str(y[0], "name")));
+            return c;
+        });
         // Resolved streams, or {hoster key, video key} pairs resolved when their turn comes.
         List<Object> out = new ArrayList<>();
-        for (int pass = 0; pass < 2; pass++) {
-            for (int i = 0; i < n; i++) {
-                if ((pass == 0) != (i == home)) continue;
-                JSONObject h = hosters.optJSONObject(i);
-                JSONArray vs = h == null ? null : h.optJSONArray("videos");
-                List<JSONObject> sorted = new ArrayList<>();
-                for (int k = 0; vs != null && k < vs.length(); k++) if (vs.optJSONObject(k) != null) sorted.add(vs.optJSONObject(k));
-                // Stable, so videos that fit equally well keep the source's order.
-                sorted.sort((x, y) -> fit(y, max) - fit(x, max));
-                for (JSONObject v : sorted) {
-                    String vk = App.str(v, "key");
-                    out.add(vk.equals(bestKey) ? stream : new String[] {App.str(h, "key"), vk});
-                }
+        for (List<JSONObject[]> group : Arrays.asList(kin, others)) {
+            for (JSONObject[] hv : group) {
+                String vk = App.str(hv[1], "key");
+                out.add(vk.equals(bestKey) ? stream : new String[] {App.str(hv[0], "key"), vk});
             }
         }
         if (!out.contains(stream)) out.add(0, stream);
@@ -201,6 +217,24 @@ final class Downloader {
                 return n;
             }
         };
+    }
+
+    private static final java.util.regex.Pattern TAG = java.util.regex.Pattern.compile("^\\[[^\\]]+\\]");
+
+    private static boolean kinOf(String home, String name) {
+        if (home.isEmpty()) return false;
+        java.util.regex.Matcher m = TAG.matcher(home);
+        return ownOf(home, name) || (m.find() && name.startsWith(m.group()));
+    }
+
+    /** The server itself or its own download file. */
+    private static boolean ownOf(String home, String name) {
+        return name.equals(home) || name.equalsIgnoreCase(home + " Download");
+    }
+
+    /** A server that hands out the episode as one file ("… Download", "DDL") instead of a stream. */
+    private static boolean isFile(String hoster) {
+        return hoster.toLowerCase(Locale.ROOT).matches(".*\\b(download|ddl)\\b.*");
     }
 
     private static boolean hasVideo(JSONObject hoster, String key) {
@@ -241,15 +275,17 @@ final class Downloader {
         quality = label(stream);
         String url = App.str(stream, "url");
         Uri out;
-        if (url.toLowerCase(Locale.ROOT).contains(".m3u8") || isHlsResponse(url)) out = saveHls(url, work);
+        if (url.toLowerCase(Locale.ROOT).contains(".m3u8") || isHlsResponse(url)) out = saveHls(url, stream.optJSONArray("audios"), work);
         else out = saveDirect(url);
         if (out == null) return;
         JSONArray subs = saveSubtitles(stream.optJSONArray("subtitles"));
+        JSONArray stamps = stream.optJSONArray("timestamps");
+        if (stamps == null || stamps.length() == 0) stamps = bestStamps;
         String path = pathOf(out);
         long bytes = sizeOf(out);
         dl.update(id, true, "state", "done", "note", "", "uri", out.toString(), "file", path == null ? "" : path,
                 "size", bytes, "got", bytes, "subs", subs, "quality", quality, "server", App.str(stream, "title"),
-                "finished", System.currentTimeMillis());
+                "stamps", stamps == null ? new JSONArray() : stamps, "finished", System.currentTimeMillis());
         Log.i(App.TAG, "downloaded " + App.str(job, "show") + " episode " + job.optDouble("ep") + " (" + quality + ")");
         listener.progress(job, 100, "Done");
     }
@@ -267,7 +303,7 @@ final class Downloader {
         }
     }
 
-    private Uri saveHls(String url, File work) throws IOException {
+    private Uri saveHls(String url, JSONArray audios, File work) throws IOException {
         String[] text = fetchText(url);
         if (!Hls.looksLike(text[0])) throw new IOException("not a playlist");
         Hls.Playlist p = Hls.parse(text[0], text[1]);
@@ -275,7 +311,7 @@ final class Downloader {
         if (p.isMaster()) {
             Hls.Variant v = Hls.pick(p.variants, maxHeight());
             if (v.height > 0) quality = v.height + "p";
-            Hls.Rendition a = Hls.audioFor(p, v);
+            Hls.Rendition a = Hls.audioFor(p, v, audioLang());
             String[] vt = fetchText(v.url);
             Hls.Playlist media = Hls.parse(vt[0], vt[1]);
             if (a != null) {
@@ -284,8 +320,11 @@ final class Downloader {
             }
             p = media;
         }
+        if (audio == null) audio = separateAudio(audios);
         if (p.segments.isEmpty()) throw new IOException("empty playlist");
-        for (Hls.Segment s : p.segments) {
+        List<Hls.Segment> all = new ArrayList<>(p.segments);
+        if (audio != null) all.addAll(audio.segments);
+        for (Hls.Segment s : all) {
             if (s.key != null && !"AES-128".equals(s.key.method)) throw new Failure("This video is copy-protected, so it can't be downloaded. Try another server");
         }
         work.mkdirs();
@@ -324,6 +363,31 @@ final class Downloader {
         }
         publish(out);
         return out;
+    }
+
+    /**
+     * The source's separate audio track, for video that comes without sound: the one in the audio language from
+     * Settings, else the first.
+     */
+    private Hls.Playlist separateAudio(JSONArray tracks) throws IOException {
+        JSONObject pick = null;
+        for (int i = 0; tracks != null && i < tracks.length(); i++) {
+            JSONObject t = tracks.optJSONObject(i);
+            if (t == null || App.str(t, "url").isEmpty()) continue;
+            if (pick == null || (Hls.speaks(App.str(t, "lang"), audioLang()) && !Hls.speaks(App.str(pick, "lang"), audioLang()))) pick = t;
+        }
+        if (pick == null) return null;
+        String[] text = fetchText(App.str(pick, "url"));
+        if (!Hls.looksLike(text[0])) {
+            Log.w(App.TAG, "audio track " + App.str(pick, "lang") + " isn't a playlist, saving the video as it is");
+            return null;
+        }
+        Hls.Playlist a = Hls.parse(text[0], text[1]);
+        if (a.isMaster()) {
+            String[] at = fetchText(a.variants.get(0).url);
+            a = Hls.parse(at[0], at[1]);
+        }
+        return a.segments.isEmpty() ? null : a;
     }
 
     private void fetchSegments(List<Hls.Segment> segs, File file, int doneBefore, int total) throws IOException {
@@ -409,10 +473,12 @@ final class Downloader {
                     if (out == null) {
                         String type = resp.header("Content-Type", "");
                         if (type != null && type.startsWith("text/")) throw new IOException("got a web page instead of a video");
-                        if (type != null && type.contains("matroska")) {
+                        // Where a redirect ended up, and the file name the server suggests.
+                        String named = (resp.request().url().encodedPath() + " " + resp.header("Content-Disposition", "")).toLowerCase(Locale.ROOT);
+                        if ((type != null && type.contains("matroska")) || named.contains(".mkv")) {
                             ext = ".mkv";
                             mime = "video/x-matroska";
-                        } else if (type != null && type.contains("webm")) {
+                        } else if ((type != null && type.contains("webm")) || named.contains(".webm")) {
                             ext = ".webm";
                             mime = "video/webm";
                         }
@@ -623,6 +689,10 @@ final class Downloader {
         } catch (NumberFormatException e) {
             return 1080;
         }
+    }
+
+    private static String audioLang() {
+        return App.I.prefs.getString("audioLang", "ja");
     }
 
     private static String label(JSONObject stream) {

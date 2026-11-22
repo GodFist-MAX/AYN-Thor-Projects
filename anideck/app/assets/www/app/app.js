@@ -524,7 +524,7 @@
   }
 
   function onboarding() {
-    return `<div class="empty"><b>Add a source to start watching</b><span>AniDeck finds and plays shows through Aniyomi extensions from the Yūzōnō repo. Pick one or two in Extensions; they install in a few seconds.</span><button class="btn primary" data-go="#/extensions" data-first>${icon('ext')} Extensions</button></div>`;
+    return `<div class="empty"><b>Add a source to start watching</b><span>AniDeck finds and plays shows through Aniyomi extensions from the Yūzōnō repo. Pick one or two in Extensions (Re:ANIME and AniZone are good first picks); they install in a few seconds.</span><button class="btn primary" data-go="#/extensions" data-first>${icon('ext')} Extensions</button></div>`;
   }
 
   // ---- AniList matching (like the app's Api.score) ----
@@ -1190,7 +1190,7 @@
     async function autoMatch() {
       if (linked() || !S.library || !S.library.account || !anime.title) return;
       try {
-        const r = await api('anilistMatch', { title: anime.title, key });
+        const r = await api('anilistMatch', { title: anime.title, key, cover: anime.thumbnail_url || '' });
         if (!p.alive || !r || !r.sure) return;
         matchA = r.a;
         drawHero();
@@ -1667,9 +1667,13 @@
 
   // ================================================================ Extensions
 
+  /** Sources known to browse, stream and download well on the Thor, listed first under Available. */
+  const RECOMMENDED = ['eu.kanade.tachiyomi.animeextension.en.reanime', 'eu.kanade.tachiyomi.animeextension.all.anizone'];
+
   function pageExtensions(p) {
     let repo = null, err = '', busy = new Set(), filter = 'mine';
     const langs = () => new Set(String(S.settings.langs || 'en').split(',').map((x) => x.trim()).filter(Boolean));
+    const rec = (x) => RECOMMENDED.includes(x.pkg);
     const draw = () => keepFocus(() => {
       let h = header('Extensions', `<button class="btn sm" data-act="refresh">${icon('refresh')} Check for updates</button>`);
       if (err) h += errBox(err);
@@ -1683,7 +1687,8 @@
       const L = langs(), nsfw = !!S.settings.showNsfw;
       const all = [...new Set(exts.map((x) => x.lang))].sort((a, b) => langName(a).localeCompare(langName(b)));
       h += `<div class="seg"><button class="btn sm${filter === 'mine' ? ' on' : ''}" data-filter="mine">Installed ${mine.length}</button><button class="btn sm${filter === 'all' ? ' on' : ''}" data-filter="all">Available</button><button class="btn sm" data-act="langs">Languages: ${esc([...L].map(langName).join(', ') || 'all')}</button><button class="btn sm${nsfw ? ' on' : ''}" data-act="nsfw">18+ ${nsfw ? 'shown' : 'hidden'}</button></div>`;
-      const shown = filter === 'mine' ? mine : exts.filter((x) => !x.installed && (L.has(x.lang) || x.lang === 'all') && (nsfw || x.rating < 2));
+      let shown = filter === 'mine' ? mine : exts.filter((x) => !x.installed && (L.has(x.lang) || x.lang === 'all') && (nsfw || x.rating < 2));
+      if (filter === 'all') shown = [...shown.filter(rec), ...shown.filter((x) => !rec(x))];
       if (filter === 'mine' && !mine.length) h += emptyBox('No extensions yet', 'Each extension adds one or more sites to browse and watch from.', `<button class="btn primary" data-filter="all" data-first>Browse the repo</button>`);
       else if (!shown.length) h += emptyBox('Nothing in these languages', 'Pick more languages above.');
       h += `<div class="list">${shown.map((x) => {
@@ -1693,7 +1698,7 @@
         const acts = b ? '<div class="spin"></div>'
           : x.installed ? `${x.update ? `<button class="btn sm primary" data-install="${esc(x.pkg)}" data-sig="up:${esc(x.pkg)}">Update</button>` : ''}<button class="btn sm" data-remove="${esc(x.pkg)}" data-sig="rm:${esc(x.pkg)}">Remove</button>`
           : `<button class="btn sm primary" data-install="${esc(x.pkg)}" data-sig="in:${esc(x.pkg)}">Install</button>`;
-        return `<div class="item"><span class="ic">${imgTag(imgUrl('0', x.icon))}</span><span class="tx"><b>${esc(x.name)}</b><small>${esc(sub)}${esc(lib ? ' · ' + lib : '')}</small>${x.broken ? `<small class="err">${esc(x.broken)}</small>` : ''}</span><span class="acts">${acts}</span></div>`;
+        return `<div class="item"><span class="ic">${imgTag(imgUrl('0', x.icon))}</span><span class="tx"><b>${esc(x.name)}${rec(x) && !x.installed ? ' <span class="chip acc">Recommended</span>' : ''}</b><small>${esc(sub)}${esc(lib ? ' · ' + lib : '')}</small>${x.broken ? `<small class="err">${esc(x.broken)}</small>` : ''}</span><span class="acts">${acts}</span></div>`;
       }).join('')}</div>`;
       p.el.innerHTML = h;
     });

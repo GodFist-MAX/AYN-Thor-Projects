@@ -170,15 +170,33 @@ final class Hls {
         return (long) v.height * 100_000_000L + v.bandwidth;
     }
 
-    /** The audio rendition a variant plays with, if its audio is a separate playlist. */
-    static Rendition audioFor(Playlist master, Variant v) {
+    /** The audio rendition a variant plays with, if its audio is a separate playlist: in the language wanted, else the default. */
+    static Rendition audioFor(Playlist master, Variant v, String want) {
         if (v.audio == null) return null;
         Rendition best = null;
         for (Rendition r : master.renditions) {
             if (!"AUDIO".equals(r.type) || !v.audio.equals(r.group) || r.url == null) continue;
+            if (speaks(r.language, want) || speaks(r.name, want)) return r;
             if (best == null || (r.isDefault && !best.isDefault)) best = r;
         }
         return best;
+    }
+
+    /** Whether an audio track labeled "ja", "jpn", "Japanese" (or, for Japanese, "Native"/"Original"/"Raw") is in the language wanted. */
+    static boolean speaks(String label, String want) {
+        if (label == null || want == null || want.isEmpty()) return false;
+        String n = label.toLowerCase(Locale.ROOT).trim();
+        Locale l = new Locale(want);
+        String iso3;
+        try {
+            iso3 = l.getISO3Language();
+        } catch (java.util.MissingResourceException e) {
+            iso3 = want;
+        }
+        if (n.equals(want) || n.startsWith(want + "-") || n.equals(iso3)) return true;
+        if ("jpn".equals(iso3) && n.matches("(native|original|raw)\\b.*")) return true;
+        String name = l.getDisplayLanguage(Locale.ENGLISH).toLowerCase(Locale.ROOT);
+        return !name.isEmpty() && !name.equals(want) && n.startsWith(name);
     }
 
     private static Map<String, String> attrs(String line) {
