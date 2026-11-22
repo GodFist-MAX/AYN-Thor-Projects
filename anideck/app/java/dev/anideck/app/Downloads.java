@@ -1,70 +1,63 @@
 package dev.anideck.app;
 
-import android.Manifest;
 import android.app.DownloadManager;
-import android.app.Notification;
 import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.database.Cursor;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.Message;
-import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Log;
-import android.webkit.JsPromptResult;
-import android.webkit.JsResult;
-import android.webkit.RenderProcessGoneDetail;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Episodes saved on the Thor. The site's Download button opens its file host's page for the episode;
- * AniDeck loads that page out of sight, where dlhost.js picks the language and quality and has the
- * host prepare the MP4, and Android's download manager saves the file to Movies/AniDeck. The list
- * (downloads.json in the app's files) feeds the bottom screen's Downloads tab, {@link OfflinePlayer}
- * and CrossBar ({@link Feed}).
+ * Episodes saved on the Thor, in Movies/AniDeck/(show), with their subtitles in the app's files. The list
+ * (downloads.json) feeds both screens, the {@link Player} and CrossBar ({@link Feed}); {@link DownloadService}
+ * works through the queue with {@link Downloader}. Records from the site version (saved by Android's download
+ * manager) stay playable.
  */
 final class Downloads {
-    private static final String FOLDER = "AniDeck";
-    private static final long PREP_MS = 20 * 60_000, POLL_MS = 700;
+    static final String FOLDER = "AniDeck";
     private static Downloads instance;
 
     private final Context app;
     private final File file;
-    private final DownloadManager dm;
     private final Handler main = new Handler(Looper.getMainLooper());
+    // Main thread only.
+    private boolean pushQueued;
+    private long lastPush;
+    private final Runnable push = () -> {
+        pushQueued = false;
+        lastPush = SystemClock.uptimeMillis();
+        App a = App.I;
+        if (a == null) return;
+        String j = json().toString();
+        if (a.bottom != null) a.toBottom("onDownloads", j);
+        a.toTop("downloads", j);
+    };
     private final ExecutorService writer = Executors.newSingleThreadExecutor();
-    private final Map<String, Prep> preps = new HashMap<>(); // main thread only
-    private JSONArray items = new JSONArray(); // guarded by this
+    private final Set<String> canceled = ConcurrentHashMap.newKeySet();
+    private JSONArray items = new JSONArray(); // guarded by this, newest first
 
     /** The feed can be read before App.onCreate has run, so this doesn't depend on App.I. */
     static synchronized Downloads get(Context c) {
@@ -75,38 +68,51 @@ final class Downloads {
     private Downloads(Context c) {
         app = c;
         file = new File(c.getFilesDir(), "downloads.json");
-        dm = c.getSystemService(DownloadManager.class);
         try {
             JSONArray a = new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).optJSONArray("items");
             if (a != null) items = a;
         } catch (IOException | JSONException ignored) {
         }
-        // The file host's page closes with the app, so an episode it was preparing has to start over.
         for (int i = 0; i < items.length(); i++) {
             JSONObject r = items.optJSONObject(i);
-            if (r != null && "preparing".equals(App.str(r, "state"))) {
+            if (r == null) continue;
+            String st = App.str(r, "state");
+            boolean old = r.optInt("v") < 2;
+            // The site version's file host pages and download manager jobs don't carry over.
+            if (old && !"done".equals(st) && !"failed".equals(st)) {
                 App.put(r, "state", "failed");
-                App.put(r, "error", "AniDeck closed before the file host was ready");
+                App.put(r, "error", "This download was started by an older AniDeck. Download the episode again");
+            } else if (!old && ("preparing".equals(st) || "downloading".equals(st))) {
+                // AniDeck stopped mid-download: it starts over when the queue runs again.
+                App.put(r, "state", "queued");
+                App.put(r, "note", "");
             }
         }
     }
 
     // ---- the list ----
 
-    /** Everything, with the download manager's progress, for the bottom screen. */
+    /** Every download, each with its show's cover on the Thor (a Shelf cover name) when there is one. */
     synchronized JSONObject json() {
         long used = 0;
-        for (int i = 0; i < items.length(); i++) {
-            JSONObject r = items.optJSONObject(i);
+        JSONArray out = copy(items);
+        Map<String, String> covers = new HashMap<>();
+        Shelf shelf = Shelf.get(app);
+        for (int i = 0; i < out.length(); i++) {
+            JSONObject r = out.optJSONObject(i);
             if (r == null) continue;
-            if ("downloading".equals(App.str(r, "state"))) check(r);
             if ("done".equals(App.str(r, "state"))) used += r.optLong("size");
+            String key = App.str(r, "key");
+            if (key.isEmpty() && r.optInt("a") > 0) key = Shelf.aniListKey(r.optInt("a"));
+            if (key.isEmpty()) continue;
+            String cover = covers.computeIfAbsent(key, k -> shelf.cover(k).isFile() ? Shelf.coverName(k) : "");
+            if (!cover.isEmpty()) App.put(r, "cover", cover);
         }
-        return App.obj("items", copy(items), "used", used, "free", Environment.getExternalStorageDirectory().getUsableSpace(),
+        return App.obj("items", out, "used", used, "free", Environment.getExternalStorageDirectory().getUsableSpace(),
                 "folder", Environment.DIRECTORY_MOVIES + "/" + FOLDER);
     }
 
-    /** Downloaded episodes, newest first, without asking the download manager (for the feed). */
+    /** Downloaded episodes, newest first (for the feed). */
     synchronized JSONArray finished() {
         JSONArray out = new JSONArray();
         for (int i = 0; i < items.length(); i++) {
@@ -121,40 +127,74 @@ final class Downloads {
         return r == null ? null : copy(r);
     }
 
-    /** Whether any download is of this show, whose cover then stays cached. */
-    synchronized boolean has(int a) {
+    synchronized boolean hasShow(String key) {
         for (int i = 0; i < items.length(); i++) {
             JSONObject r = items.optJSONObject(i);
-            if (r != null && a > 0 && r.optInt("a") == a) return true;
+            if (r != null && key.equals(App.str(r, "key"))) return true;
         }
         return false;
+    }
+
+    /** The download of one episode, if there is one. */
+    synchronized JSONObject find(String key, String epUrl) {
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject r = items.optJSONObject(i);
+            if (r != null && key.equals(App.str(r, "key")) && epUrl.equals(App.str(r.optJSONObject("episode"), "url"))) return copy(r);
+        }
+        return null;
+    }
+
+    /** A show's downloads by episode URL, for its page: {url: {id, state, pct}}. */
+    synchronized JSONObject forShow(String key) {
+        JSONObject out = new JSONObject();
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject r = items.optJSONObject(i);
+            if (r == null || !key.equals(App.str(r, "key"))) continue;
+            long size = r.optLong("size"), got = r.optLong("got");
+            App.put(out, App.str(r.optJSONObject("episode"), "url"), App.obj("id", App.str(r, "id"), "state", App.str(r, "state"),
+                    "pct", size > 0 ? Math.min(100, Math.round(got * 100.0 / size)) : 0));
+        }
+        return out;
     }
 
     /** The next (dir 1) or previous (-1) downloaded episode of the same show. */
     synchronized JSONObject neighbor(JSONObject cur, int dir) {
         JSONObject best = null;
-        int ep = cur.optInt("ep");
+        double ep = cur.optDouble("ep", 0);
         for (int i = 0; i < items.length(); i++) {
             JSONObject r = items.optJSONObject(i);
             if (r == null || !"done".equals(App.str(r, "state")) || !sameShow(r, cur)) continue;
-            int e = r.optInt("ep");
-            if (dir > 0 ? e > ep && (best == null || e < best.optInt("ep")) : e < ep && (best == null || e > best.optInt("ep"))) best = r;
+            double e = r.optDouble("ep", 0);
+            if (dir > 0 ? e > ep && (best == null || e < best.optDouble("ep", 0)) : e < ep && (best == null || e > best.optDouble("ep", 0))) best = r;
         }
         return best == null ? null : copy(best);
     }
 
-    /** Where the player reads a downloaded episode: through the download manager, else the file itself. */
-    Uri uri(JSONObject r) {
-        long d = r.optLong("dm", -1);
-        Uri u = null;
-        try {
-            if (d >= 0) u = dm.getUriForDownloadedFile(d);
-        } catch (RuntimeException ignored) {
+    /** The downloaded episodes of a record's show, in episode order. */
+    synchronized List<JSONObject> showDownloads(JSONObject cur) {
+        List<JSONObject> out = new ArrayList<>();
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject r = items.optJSONObject(i);
+            if (r != null && "done".equals(App.str(r, "state")) && sameShow(r, cur)) out.add(copy(r));
         }
-        return u != null ? u : Uri.fromFile(new File(App.str(r, "file")));
+        out.sort((x, y) -> Double.compare(x.optDouble("ep", 0), y.optDouble("ep", 0)));
+        return out;
     }
 
-    /** Where an episode was left off, for the player, the bottom screen and CrossBar. */
+    /** Where the player reads a downloaded episode. */
+    Uri uri(JSONObject r) {
+        String u = App.str(r, "uri");
+        if (!u.isEmpty()) return Uri.parse(u);
+        long d = r.optLong("dm", -1);
+        Uri out = null;
+        try {
+            if (d >= 0) out = app.getSystemService(DownloadManager.class).getUriForDownloadedFile(d);
+        } catch (RuntimeException ignored) {
+        }
+        return out != null ? out : Uri.fromFile(new File(App.str(r, "file")));
+    }
+
+    /** Where an episode was left off, for the player, both screens and CrossBar. */
     void position(String id, double t, double d) {
         synchronized (this) {
             JSONObject r = item(id);
@@ -163,382 +203,147 @@ final class Downloads {
             App.put(r, "d", Math.round(d));
             App.put(r, "at", System.currentTimeMillis());
         }
-        changed();
+        changed(false);
     }
 
-    // ---- downloading ----
+    // ---- queueing ----
 
-    /** The site's Download button opened url for the episode on the top screen (st). Main thread. */
-    void start(String url, JSONObject st) {
-        String show = App.str(st, "show");
-        int a = st.optInt("anilistId"), ep = st.optInt("ep");
-        if (!"watch".equals(App.str(st, "page")) || show.isEmpty() || ep <= 0) {
-            say("Open an episode to download it");
-            return;
-        }
-        boolean dub = App.str(st, "lang").contains("dub"), hd = App.I.setting("dlHD");
-        String id = Long.toString(System.currentTimeMillis(), 36);
+    /**
+     * Queues episodes of a show; ones already downloaded or queued are skipped. pick: the server and
+     * quality playing now ({hoster, video} names), or null for the source's preferred video.
+     */
+    int add(String source, String sourceName, JSONObject anime, JSONArray episodes, int anilistId, JSONObject pick) {
+        String key = Shelf.key(source, App.str(anime, "url"));
+        int added = 0;
         synchronized (this) {
-            JSONObject old = episode(a, show, ep);
-            if (old != null && !"failed".equals(App.str(old, "state"))) {
-                say("Episode " + ep + ("done".equals(App.str(old, "state")) ? " is already downloaded" : " is already downloading"));
-                return;
-            }
-            if (old != null) drop(App.str(old, "id"));
             JSONArray next = new JSONArray();
-            next.put(App.obj("id", id, "a", a, "show", show, "ep", ep, "epTitle", App.str(st, "epTitle"),
-                    "path", App.str(st, "path"), "lang", dub ? "dub" : "sub", "hd", hd, "state", "preparing",
-                    "note", "Opening the file host", "added", System.currentTimeMillis()));
+            for (int i = 0; i < episodes.length(); i++) {
+                JSONObject ep = episodes.optJSONObject(i);
+                if (ep == null) continue;
+                JSONObject old = itemFor(key, App.str(ep, "url"));
+                if (old != null && !"failed".equals(App.str(old, "state"))) continue;
+                if (old != null) drop(App.str(old, "id"));
+                String id = Long.toString(System.currentTimeMillis(), 36) + Integer.toString(i, 36);
+                double num = ep.optDouble("episode_number", -1);
+                JSONObject r = App.obj("v", 2, "id", id, "key", key, "source", source, "sourceName", sourceName,
+                        "anime", App.obj("url", App.str(anime, "url"), "title", App.str(anime, "title"), "thumbnail_url", App.str(anime, "thumbnail_url")),
+                        "episode", ep, "show", App.str(anime, "title"), "ep", num >= 0 ? num : i + 1, "epTitle", App.str(ep, "name"),
+                        "a", anilistId, "state", "queued", "added", System.currentTimeMillis());
+                if (pick != null) App.put(r, "pick", pick);
+                next.put(r);
+                added++;
+            }
             for (int i = 0; i < items.length(); i++) next.put(items.opt(i));
             items = next;
         }
-        preps.put(id, new Prep(id, url, want(dub, hd)));
-        if (a > 0) Shelf.get(app).keepCover(a);
-        say("Downloading episode " + ep + ". Follow it in Downloads on the bottom screen");
-        changed();
+        if (added > 0) {
+            Shelf.get(app).remember(source, sourceName, anime);
+            changed(true);
+            run();
+        }
+        return added;
     }
 
-    /** What dlhost.js picks on the file host's page: the language watched on the site, and the quality setting. */
-    private static JSONObject want(boolean dub, boolean hd) {
-        return App.obj(
-                "versions", arr(dub ? new String[] {"^dub", "dub"} : new String[] {"^ssub", "soft", "^sub", "^hsub", "hard"}),
-                "audios", arr(dub ? new String[] {"english", "dub"} : new String[] {"japanese", "original"}),
-                "qualities", arr(hd ? new String[] {"1080", "720", "480"} : new String[] {"480", "360", "720", "1080"}));
+    /** Retry on a failed download (or one that stopped): back in the queue. */
+    void retry(String id) {
+        synchronized (this) {
+            JSONObject r = item(id);
+            if (r == null || r.optInt("v") < 2 || "done".equals(App.str(r, "state"))) return;
+            App.put(r, "state", "queued");
+            App.put(r, "error", "");
+            App.put(r, "note", "");
+            App.put(r, "got", 0);
+            App.put(r, "size", 0);
+        }
+        changed(true);
+        run();
     }
 
-    /** Cancel or Delete: stops the episode's download if it's still going, deletes its file and forgets it. Main thread. */
+    /** Cancel or Delete: stops the episode's download if it's going, deletes its files and forgets it. */
     void delete(String id) {
-        Prep p = preps.remove(id);
-        if (p != null) p.close();
         JSONObject r;
         synchronized (this) {
             r = item(id);
             if (r == null) return;
             drop(id);
         }
-        long d = r.optLong("dm", -1);
-        String path = App.str(r, "file");
-        App.I.io.execute(() -> {
-            if (d >= 0) dm.remove(d);
-            if (path.isEmpty()) return;
-            File f = new File(path);
-            if (f.exists() && !f.delete()) Log.w(App.TAG, "could not delete " + f.getName());
-            File dir = f.getParentFile();
-            if (dir != null) dir.delete(); // only once the show's folder is empty
-        });
-        changed();
+        canceled.add(id);
+        app.getSystemService(NotificationManager.class).cancel("download", id.hashCode());
+        App.I.io.execute(() -> removeFiles(r));
+        changed(true);
     }
 
-    /** The file host's page gave the MP4's address: the download manager takes it from here. */
-    private void enqueue(String id, String href, JSONObject got, String referer) {
-        String title, name;
-        int ep;
-        synchronized (this) {
-            JSONObject r = item(id);
-            if (r == null) return;
-            ep = r.optInt("ep");
-            title = App.str(r, "show") + " · Episode " + ep;
-            name = safe(App.str(r, "show")) + "/" + fileName(r);
-        }
-        long d;
+    private void removeFiles(JSONObject r) {
+        String uri = App.str(r, "uri");
         try {
-            d = dm.enqueue(new DownloadManager.Request(Uri.parse(href))
-                    .setTitle(title)
-                    .setMimeType("video/mp4")
-                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-                    .addRequestHeader("User-Agent", WebSettings.getDefaultUserAgent(app))
-                    .addRequestHeader("Referer", referer)
-                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_MOVIES, FOLDER + "/" + name));
-        } catch (RuntimeException e) {
-            Log.w(App.TAG, "could not start the download: " + e);
-            failed(id, "Couldn't save to Movies on this Thor");
-            return;
-        }
-        synchronized (this) {
-            JSONObject r = item(id);
-            if (r == null) {
-                dm.remove(d);
-                return;
-            }
-            App.put(r, "state", "downloading");
-            App.put(r, "dm", d);
-            App.put(r, "note", "Waiting to start");
-            for (String k : new String[] {"version", "audio", "quality"}) App.put(r, k, App.str(got, k));
-            App.put(r, "file", new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), FOLDER + "/" + name).getPath());
-        }
-        Log.i(App.TAG, "downloading " + name);
-        String instead = App.str(got, "instead");
-        if (!instead.isEmpty()) {
-            say("Episode " + ep + " in " + instead + " was still waiting at the file host, so it's downloading in " + App.str(got, "quality"));
-        }
-        changed();
-    }
-
-    /** The download manager says one of its downloads ended (DownloadDone). */
-    void completed(long dmId) {
-        synchronized (this) {
-            for (int i = 0; i < items.length(); i++) {
-                JSONObject r = items.optJSONObject(i);
-                if (r != null && r.optLong("dm", -1) == dmId && "downloading".equals(App.str(r, "state"))) check(r);
-            }
-        }
-    }
-
-    /** The download manager's progress for one episode; the caller holds the lock. */
-    private void check(JSONObject r) {
-        try (Cursor c = dm.query(new DownloadManager.Query().setFilterById(r.optLong("dm", -1)))) {
-            if (c == null || !c.moveToFirst()) {
-                fail(r, "The download was stopped outside AniDeck");
-                return;
-            }
-            int status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
-            int reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON));
-            long size = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
-            App.put(r, "got", c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)));
-            if (size > 0) App.put(r, "size", size);
-            if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                finish(r, c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI)));
-            } else if (status == DownloadManager.STATUS_FAILED) {
-                fail(r, failure(reason));
+            if (!uri.isEmpty()) {
+                app.getContentResolver().delete(Uri.parse(uri), null, null);
             } else {
-                App.put(r, "note", status == DownloadManager.STATUS_PAUSED ? paused(reason)
-                        : status == DownloadManager.STATUS_PENDING ? "Waiting to start" : "");
+                long d = r.optLong("dm", -1);
+                if (d >= 0) app.getSystemService(DownloadManager.class).remove(d);
+                String path = App.str(r, "file");
+                File f = path.isEmpty() ? null : new File(path);
+                if (f != null && f.exists() && !f.delete()) Log.w(App.TAG, "could not delete " + f.getName());
             }
+            dropEmptyFolder(App.str(r, "file"));
+        } catch (RuntimeException e) {
+            Log.w(App.TAG, "could not delete a download: " + e);
+        }
+        deleteTree(subsDir(App.str(r, "id")));
+        deleteTree(workDir(App.str(r, "id")));
+    }
+
+    /** Starts the download service if anything is waiting. */
+    void run() {
+        if (next() == null) return;
+        try {
+            app.startForegroundService(new Intent(app, DownloadService.class));
+        } catch (RuntimeException e) {
+            Log.w(App.TAG, "could not start downloading: " + e);
         }
     }
 
-    /** The caller holds the lock. */
-    private void finish(JSONObject r, String local) {
-        App.put(r, "state", "done");
-        App.put(r, "note", "");
-        App.put(r, "got", r.optLong("size"));
-        App.put(r, "finished", System.currentTimeMillis());
-        String path = local == null ? null : Uri.parse(local).getPath();
-        if (path != null) App.put(r, "file", path);
-        String id = App.str(r, "id");
-        Log.i(App.TAG, "downloaded " + App.str(r, "show") + " episode " + r.optInt("ep"));
-        App.I.io.execute(() -> {
-            readSubtitles(id);
-            notifyDone(id);
-        });
-        changed();
+    // ---- for the download service ----
+
+    /** The oldest queued download. */
+    synchronized JSONObject next() {
+        for (int i = items.length() - 1; i >= 0; i--) {
+            JSONObject r = items.optJSONObject(i);
+            if (r != null && "queued".equals(App.str(r, "state"))) return copy(r);
+        }
+        return null;
     }
 
-    /** The caller holds the lock. */
-    private void fail(JSONObject r, String error) {
-        App.put(r, "state", "failed");
-        App.put(r, "error", error);
-        App.put(r, "note", "");
-        Log.w(App.TAG, "download failed: " + error);
-        changed();
+    synchronized int queued() {
+        int n = 0;
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject r = items.optJSONObject(i);
+            String st = r == null ? "" : App.str(r, "state");
+            if ("queued".equals(st) || "preparing".equals(st) || "downloading".equals(st)) n++;
+        }
+        return n;
     }
 
-    private void failed(String id, String error) {
+    boolean isCanceled(String id) {
+        return canceled.contains(id);
+    }
+
+    /** Fields the downloader sets as it goes; progress-only updates aren't written to disk each time. */
+    void update(String id, boolean persist, Object... keysAndValues) {
         synchronized (this) {
             JSONObject r = item(id);
-            if (r != null) fail(r, error);
-        }
-    }
-
-    private void note(String id, String text) {
-        synchronized (this) {
-            JSONObject r = item(id);
-            if (r == null || text.equals(App.str(r, "note"))) return;
-            App.put(r, "note", text);
-        }
-        changed();
-    }
-
-    private static String failure(int reason) {
-        switch (reason) {
-            case DownloadManager.ERROR_INSUFFICIENT_SPACE: return "Not enough space on the Thor";
-            case DownloadManager.ERROR_CANNOT_RESUME: return "The download broke off and couldn't pick up again";
-            case DownloadManager.ERROR_HTTP_DATA_ERROR: return "The connection dropped";
-            case DownloadManager.ERROR_FILE_ERROR:
-            case DownloadManager.ERROR_DEVICE_NOT_FOUND: return "Couldn't save the file to Movies";
-            case DownloadManager.ERROR_FILE_ALREADY_EXISTS: return "There's already a file with that name";
-            default:
-                return reason >= 400 && reason < 600 ? "The file host turned the download down (HTTP " + reason + ")"
-                        : "The file host stopped sending the episode";
-        }
-    }
-
-    private static String paused(int reason) {
-        switch (reason) {
-            case DownloadManager.PAUSED_WAITING_FOR_NETWORK: return "Waiting for the internet";
-            case DownloadManager.PAUSED_QUEUED_FOR_WIFI: return "Waiting for Wi-Fi";
-            case DownloadManager.PAUSED_WAITING_TO_RETRY: return "Trying again in a moment";
-            default: return "Paused";
-        }
-    }
-
-    // ---- after the download ----
-
-    /** Names of the file's subtitle tracks, for the player's subtitle choices. */
-    private void readSubtitles(String id) {
-        JSONObject r = get(id);
-        if (r == null) return;
-        JSONArray subs;
-        try (ParcelFileDescriptor fd = app.getContentResolver().openFileDescriptor(uri(r), "r");
-             FileInputStream in = new FileInputStream(fd.getFileDescriptor())) {
-            subs = Mp4.subtitles(in.getChannel());
-        } catch (IOException | RuntimeException e) {
-            Log.w(App.TAG, "could not read the subtitle tracks: " + e);
-            return;
-        }
-        synchronized (this) {
-            r = item(id);
             if (r == null) return;
-            App.put(r, "subs", subs);
+            for (int i = 0; i + 1 < keysAndValues.length; i += 2) App.put(r, (String) keysAndValues[i], keysAndValues[i + 1]);
         }
-        changed();
+        changed(persist);
     }
 
-    private void notifyDone(String id) {
-        JSONObject r = get(id);
-        if (r == null || app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
-        Intent open = new Intent(app, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                .putExtra(MainActivity.EXTRA_DOWNLOAD, id);
-        PendingIntent pi = PendingIntent.getActivity(app, id.hashCode(), open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification.Builder b = new Notification.Builder(app, App.CHANNEL_DOWNLOADS)
-                .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setContentTitle(App.str(r, "show"))
-                .setContentText("Episode " + r.optInt("ep") + " is downloaded. Tap to watch it")
-                .setContentIntent(pi)
-                .setAutoCancel(true)
-                .setGroup("downloads");
-        File cover = r.optInt("a") > 0 ? Shelf.get(app).cover(r.optInt("a")) : null;
-        Bitmap art = cover != null && cover.isFile() ? BitmapFactory.decodeFile(cover.getPath()) : null;
-        if (art != null) b.setLargeIcon(art);
-        app.getSystemService(NotificationManager.class).notify("download", id.hashCode(), b.build());
+    File subsDir(String id) {
+        return new File(app.getFilesDir(), "subs/" + id.replaceAll("[^\\w-]", ""));
     }
 
-    // ---- the file host's page ----
-
-    /** The file host's page for one episode, open out of sight until it gives the MP4's address. */
-    private final class Prep {
-        private final String id, host, script;
-        private final WebView w;
-        private final long until = SystemClock.uptimeMillis() + PREP_MS;
-        private final Runnable poll = this::poll;
-        private boolean closed;
-
-        Prep(String id, String url, JSONObject want) {
-            this.id = id;
-            String h = Uri.parse(url).getHost();
-            host = h == null ? "" : h.toLowerCase(Locale.ROOT);
-            script = "(" + App.I.asset("www/dlhost.js") + ")(" + want + ")";
-            w = new WebView(app);
-            WebSettings s = w.getSettings();
-            s.setJavaScriptEnabled(true);
-            s.setDomStorageEnabled(true);
-            s.setBlockNetworkImage(true);
-            s.setMediaPlaybackRequiresUserGesture(true);
-            s.setSupportMultipleWindows(true);
-            s.setJavaScriptCanOpenWindowsAutomatically(false);
-            w.setWebChromeClient(new WebChromeClient() {
-                @Override public boolean onCreateWindow(WebView v, boolean dialog, boolean gesture, Message m) {
-                    return false;
-                }
-
-                // Dialogs need an activity, and nobody would see them.
-                @Override public boolean onJsAlert(WebView v, String u, String m, JsResult r) {
-                    r.cancel();
-                    return true;
-                }
-
-                @Override public boolean onJsConfirm(WebView v, String u, String m, JsResult r) {
-                    r.cancel();
-                    return true;
-                }
-
-                @Override public boolean onJsPrompt(WebView v, String u, String m, String d, JsPromptResult r) {
-                    r.cancel();
-                    return true;
-                }
-            });
-            w.setWebViewClient(new WebViewClient() {
-                @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-                    if (r.isForMainFrame() && ours(r.getUrl())) return false;
-                    Log.i(App.TAG, "download page: blocked a jump to " + r.getUrl().getHost());
-                    return true;
-                }
-
-                // Only the file host itself: no ads, and not the preview player's stream.
-                @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
-                    if (ours(r.getUrl())) return null;
-                    return new WebResourceResponse("text/plain", "utf-8", 204, "No Content", Map.of(), new ByteArrayInputStream(new byte[0]));
-                }
-
-                @Override public void onPageFinished(WebView v, String u) {
-                    if (!closed && ours(Uri.parse(u))) v.evaluateJavascript(script, null);
-                }
-
-                @Override public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
-                    CoroBugs.rendererGone(app, "download page", d.didCrash());
-                    end(null, "The file host's page crashed");
-                    return true;
-                }
-            });
-            w.setDownloadListener((href, ua, disposition, mime, length) -> {
-                if (mime != null && mime.startsWith("video/")) end(App.obj("href", href), null);
-            });
-            w.loadUrl(url, Map.of("Referer", Site.base() + "/"));
-            main.postDelayed(poll, POLL_MS);
-        }
-
-        private boolean ours(Uri u) {
-            String h = u == null ? null : u.getHost();
-            if (h == null || host.isEmpty()) return false;
-            h = h.toLowerCase(Locale.ROOT);
-            return h.equals(host) || h.endsWith("." + host);
-        }
-
-        private void poll() {
-            if (closed) return;
-            if (SystemClock.uptimeMillis() > until) {
-                end(null, "The file host took too long to prepare the episode");
-                return;
-            }
-            w.evaluateJavascript("window.__anideckDl||null", v -> {
-                if (closed) return;
-                JSONObject o = null;
-                try {
-                    o = new JSONObject(v);
-                } catch (JSONException | NullPointerException ignored) {
-                }
-                String stage = App.str(o, "stage");
-                if ("ready".equals(stage)) {
-                    end(o, null);
-                } else if ("error".equals(stage)) {
-                    end(null, App.str(o, "error"));
-                } else {
-                    String n = App.str(o, "note");
-                    if ("preparing".equals(stage)) {
-                        note(id, "queued".equals(n) ? "Waiting in the file host's queue"
-                                : "Preparing on the file host" + (n.isEmpty() ? "" : " · " + n));
-                    }
-                    main.postDelayed(poll, POLL_MS);
-                }
-            });
-        }
-
-        private void end(JSONObject o, String error) {
-            if (closed) return;
-            close();
-            preps.remove(id);
-            String href = App.str(o, "href");
-            if (error == null && !href.startsWith("https://")) error = "";
-            if (error != null) failed(id, error.isEmpty() ? "The file host couldn't prepare the episode" : error);
-            else enqueue(id, href, o, "https://" + host + "/");
-        }
-
-        void close() {
-            closed = true;
-            main.removeCallbacks(poll);
-            // Not from inside one of its own callbacks.
-            main.post(w::destroy);
-        }
+    File workDir(String id) {
+        return new File(app.getCacheDir(), "dl/" + id.replaceAll("[^\\w-]", ""));
     }
 
     // ---- helpers; the callers hold the lock ----
@@ -551,11 +356,10 @@ final class Downloads {
         return null;
     }
 
-    private JSONObject episode(int a, String show, int ep) {
-        JSONObject probe = App.obj("a", a, "show", show);
+    private JSONObject itemFor(String key, String epUrl) {
         for (int i = 0; i < items.length(); i++) {
             JSONObject r = items.optJSONObject(i);
-            if (r != null && r.optInt("ep") == ep && sameShow(r, probe)) return r;
+            if (r != null && key.equals(App.str(r, "key")) && epUrl.equals(App.str(r.optJSONObject("episode"), "url"))) return r;
         }
         return null;
     }
@@ -567,18 +371,25 @@ final class Downloads {
         }
     }
 
-    private static boolean sameShow(JSONObject x, JSONObject y) {
+    static boolean sameShow(JSONObject x, JSONObject y) {
+        String k = App.str(x, "key");
+        if (!k.isEmpty() || !App.str(y, "key").isEmpty()) return k.equals(App.str(y, "key"));
         int a = x.optInt("a");
         return a > 0 ? a == y.optInt("a") : App.str(x, "show").equals(App.str(y, "show"));
     }
 
     // ---- saving ----
 
-    private void changed() {
+    /** Progress changes many times a second: the screens get it at most twice a second, other changes at once. */
+    private void changed(boolean persist) {
         main.post(() -> {
-            App a = App.I;
-            if (a != null && a.bottom != null) a.toBottom("onDownloads", json().toString());
+            long wait = persist ? 0 : Math.max(0, lastPush + 500 - SystemClock.uptimeMillis());
+            if (pushQueued && wait > 0) return;
+            main.removeCallbacks(push);
+            pushQueued = true;
+            main.postDelayed(push, wait);
         });
+        if (!persist) return;
         String text;
         synchronized (this) {
             text = App.obj("items", items).toString();
@@ -595,31 +406,33 @@ final class Downloads {
         });
     }
 
-    private static void say(String text) {
-        MainActivity m = App.I.top;
-        if (m != null) m.showToast(text);
-    }
-
-    /** "Episode 01 - The Journey's End.mp4" */
-    private static String fileName(JSONObject r) {
-        int ep = r.optInt("ep");
-        String title = App.str(r, "epTitle");
-        String n = String.format(Locale.ROOT, "Episode %02d", ep);
-        if (!title.isEmpty() && !title.matches("(?i)episode\\s*\\d+")) n += " - " + title;
-        return safe(n) + ".mp4";
+    /** "Episode 01 - The Journey's End" */
+    static String fileName(JSONObject r) {
+        double ep = r.optDouble("ep", 0);
+        String num = ep == Math.floor(ep) ? String.format(Locale.ROOT, "%02d", (long) ep) : String.valueOf(ep);
+        String title = VideoPlayer.cleanTitle(App.str(r, "epTitle"));
+        String n = "Episode " + num;
+        if (!title.isEmpty() && !title.matches("(?i).*episode\\s*[\\d.]+\\s*") && !title.matches("[\\d.\\s]+")) n += " - " + title;
+        return safe(n);
     }
 
     /** A file or folder name that's safe on any storage. */
-    private static String safe(String s) {
+    static String safe(String s) {
         String out = s.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", " ").replaceAll("\\s+", " ").trim().replaceAll("^\\.+|\\.+$", "");
         if (out.length() > 80) out = out.substring(0, 80).trim();
         return out.isEmpty() ? "Episode" : out;
     }
 
-    private static JSONArray arr(String... values) {
-        JSONArray a = new JSONArray();
-        for (String v : values) a.put(v);
-        return a;
+    /** A show's folder in Movies/AniDeck, once its last episode is gone (a folder with files in it won't delete). */
+    private static void dropEmptyFolder(String file) {
+        File dir = file.isEmpty() ? null : new File(file).getParentFile();
+        if (dir != null && dir.getParentFile() != null && "AniDeck".equals(dir.getParentFile().getName())) dir.delete();
+    }
+
+    static void deleteTree(File f) {
+        File[] kids = f.listFiles();
+        if (kids != null) for (File k : kids) deleteTree(k);
+        f.delete();
     }
 
     private static JSONObject copy(JSONObject o) {

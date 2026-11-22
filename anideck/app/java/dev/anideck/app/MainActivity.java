@@ -5,7 +5,6 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
-import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
@@ -13,7 +12,6 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.Message;
 import android.os.SystemClock;
 import android.util.Log;
 import android.util.TypedValue;
@@ -26,81 +24,73 @@ import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.webkit.ConsoleMessage;
-import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
-import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
-import android.webkit.WebBackForwardList;
 import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
+import dev.anideck.app.ext.Images;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.math.BigInteger;
-import java.security.SecureRandom;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
 
-/** The top screen: the site in a WebView, driven by touch, the controller and the bottom screen. */
+/**
+ * The top screen: AniDeck's own pages (sources, shows, episodes, library, downloads, settings) in a
+ * WebView served from the app at https://app.anideck/, the {@link VideoPlayer} over them, and the AniList
+ * login. Driven by touch, the controller ({@link Pad}) and the bottom screen.
+ */
 public class MainActivity extends Activity implements Net.Listener {
     static final String EXTRA_OPEN = "dev.anideck.app.OPEN";
     static final String EXTRA_EP = "dev.anideck.app.EP";
     static final String EXTRA_TITLE = "dev.anideck.app.TITLE";
-    /** A watch page path, for history entries whose AniList id wasn't known. */
-    static final String EXTRA_PATH = "dev.anideck.app.PATH";
+    /** A show on the Thor (its key in {@link Shelf}); with EXTRA_RESUME it plays where it was left off. */
+    static final String EXTRA_SHOW = "dev.anideck.app.SHOW";
+    static final String EXTRA_RESUME = "dev.anideck.app.RESUME";
     /** A downloaded episode to play (its id in {@link Downloads}). */
     static final String EXTRA_DOWNLOAD = "dev.anideck.app.DOWNLOAD";
+    /** A page of the app, like "#/downloads". */
+    static final String EXTRA_ROUTE = "dev.anideck.app.ROUTE";
     private static final String EXTRA_REFOCUS = "dev.anideck.app.REFOCUS";
+    static final String HOST = "app.anideck";
+    private static final String HOME = "https://" + HOST + "/index.html";
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+    private static final Map<String, String> TYPES = Map.of("html", "text/html", "js", "application/javascript",
+            "css", "text/css", "svg", "image/svg+xml", "png", "image/png", "json", "application/json", "woff2", "font/woff2");
 
     private final Handler h = new Handler(Looper.getMainLooper());
-    /** Proves a bridge call came from inject.js in the site's main frame, not from an ad iframe. */
-    private final String nonce = new BigInteger(130, new SecureRandom()).toString(32);
     private FrameLayout root;
     private WebView web;
-    private View full;
-    private WebChromeClient.CustomViewCallback fullDone;
-    private TextView offline, toast, exitButton;
-    private String inject;
-    /** What's on screen: the page's state, or the offline player's while it's open. */
-    private JSONObject state = new JSONObject();
-    private JSONObject pageState = new JSONObject();
-    private OfflinePlayer player;
+    private TextView offline, toast;
+    private VideoPlayer player;
+    private Login login;
     private Session session;
-    private boolean resumed, refocusing, loadFailed;
-    private long refocusAt, lastBlockedNotice;
-    /** A show to pick out of the site's search results once they load: {a: AniList id, ep}. */
-    private JSONObject pendingFind;
-    /** An episode opened from the bottom screen or a notification starts playing if it loads before this. */
-    private long playBefore;
-    /** A failed download to try again once its episode's page is open: {path, ep, until}. */
-    private JSONObject pendingDownload;
-    /** Playback paused because the connection dropped, to pick up again once it's back. */
-    private boolean resumeOnNet;
-    private double resumeAt = -1;
-    private String resumeUrl;
-    private final Runnable checkResumed = this::checkResumed;
+    private boolean resumed, refocusing, pageReady;
+    private long refocusAt;
+    /** A page to show once the app's page has loaded. */
+    private String pendingRoute;
     private final Runnable hideToast = () -> toast.setVisibility(View.GONE);
-    private final Runnable hideExit = () -> exitButton.setVisibility(View.GONE);
-    private long escAt;
     /** The display this activity was last on. CrossBar's Now Playing can move it to the bottom screen to watch there. */
     private int displayId = Display.DEFAULT_DISPLAY;
-    /** Whether fill-screen mode was already on when the episode moved to the bottom screen, which turns it on. */
-    private boolean theaterBefore;
 
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
         App.I.top = this;
         devFlag(getIntent());
-        inject = "(" + App.I.asset("www/inject.js") + ")(\"" + nonce + "\", (function () {\n"
-                + App.I.asset("www/nav.js") + "\nreturn AniNav;\n})())";
-
         root = new FrameLayout(this) {
             @Override public boolean dispatchKeyEventPreIme(KeyEvent e) {
                 return Pad.early(e) || super.dispatchKeyEventPreIme(e);
@@ -111,35 +101,26 @@ public class MainActivity extends Activity implements Net.Listener {
         web.setDefaultFocusHighlightEnabled(false);
         root.addView(web, new FrameLayout.LayoutParams(MATCH, MATCH));
         offline = pill(Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0xF0402A08, 0xFFFFC46B);
-        offline.setText("No internet. AniDeck is paused and picks up where you left off when Wi-Fi is back.");
+        offline.setText("No internet. Downloaded episodes still play, in Downloads.");
         toast = pill(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 0xE6181822, 0x33FFFFFF);
-        exitButton = pill(Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0xE6181822, 0x66FFFFFF);
-        exitButton.setText("✕   Exit fill screen");
-        exitButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        exitButton.setPadding(dp(24), dp(12), dp(24), dp(12));
-        exitButton.setOnClickListener(v -> {
-            exitButton.setVisibility(View.GONE);
-            if (full != null) exitFull();
-            else pageCmd(App.obj("c", "theater", "on", false));
-        });
         setContentView(root);
         // Keys reach dispatchKeyEventPreIme only along the focus path.
         web.requestFocus();
         setUpWeb();
-        player = new OfflinePlayer(this, root);
-
+        player = new VideoPlayer(this, root);
+        login = new Login(this, root);
         session = new Session(this);
         App.I.net.listen(this);
         askForNotifications();
-        // A download from CrossBar or a notification plays over the last page, which loads underneath.
-        if (!open(getIntent())) web.loadUrl(startUrl());
+        web.loadUrl(HOME);
+        open(getIntent());
         if (App.I.pageCrashed) {
             App.I.pageCrashed = false;
             showToast("The page crashed, so AniDeck reloaded it");
         }
-        if (!App.I.net.online() && !player.isOpen()) offline.setVisibility(View.VISIBLE);
+        offline.setVisibility(App.I.net.online() ? View.GONE : View.VISIBLE);
         App.I.library.syncIfStale();
-        Shelf.get(this).refresh();
+        Downloads.get(this).run();
         hideSystemUi();
     }
 
@@ -147,285 +128,86 @@ public class MainActivity extends Activity implements Net.Listener {
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
-        s.setMediaPlaybackRequiresUserGesture(false);
-        s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
-        s.setSupportMultipleWindows(true);
-        s.setJavaScriptCanOpenWindowsAutomatically(false);
+        s.setAllowFileAccess(false);
+        s.setAllowContentAccess(false);
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        s.setSupportMultipleWindows(false);
         s.setTextZoom(100);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
-        web.setBackgroundColor(Color.BLACK);
-        web.addJavascriptInterface(new Bridge(), "AniDeckTop");
-        web.setDownloadListener((url, ua, disposition, mime, length) -> {
-            if (mime != null && mime.startsWith("video/")) Downloads.get(this).start(url, pageState);
-            else showToast("AniDeck only saves episodes, with the Download button under the video");
-        });
+        web.setBackgroundColor(0xFF0B0B12);
+        web.addJavascriptInterface(new Bridge(), "AniDeck");
         web.setWebViewClient(new Client());
-        web.setWebChromeClient(new Chrome());
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onConsoleMessage(ConsoleMessage m) {
+                if (App.I.prefs.getBoolean("dev", false)) Log.d(App.TAG, "top: " + m.message() + " (" + m.lineNumber() + ")");
+                return true;
+            }
+        });
     }
 
-    /** The page the app was on last time, if it was the site. */
-    private String startUrl() {
-        String last = App.I.prefs.getString("lastUrl", null);
-        if (last != null && Site.isSite(Uri.parse(last).getHost())) return last;
-        return Site.base();
+    // ---- the app's pages ----
+
+    /** Calls window.app.on(event, data) in the top screen's page. */
+    void toTop(String event, String json) {
+        h.post(() -> {
+            if (web != null && pageReady) web.evaluateJavascript("window.app&&app.on(" + JSONObject.quote(event) + "," + json + ")", null);
+        });
     }
 
-    // ---- page script ----
-
-    /** The page script runs on the site only, not on AniList's login pages. */
-    private void injectNow(String url) {
-        if (web != null && onSite(url)) web.evaluateJavascript(inject, null);
-    }
-
-    private static boolean onSite(String url) {
-        return url != null && Site.isSite(Uri.parse(url).getHost());
-    }
-
-    /** Off the site (the AniList login) there's no page script, so the state says only where we are. */
-    private void offSite(String url) {
-        if (url == null || onSite(url) || url.equals(App.str(state, "url"))) return;
-        String page = Site.isLogin(Uri.parse(url).getHost()) ? "login" : "external";
-        onState(App.obj("url", url, "page", page, "player", JSONObject.NULL).toString());
-    }
-
-    /** The page's state, even while a download plays over it. */
-    JSONObject state() {
-        return pageState;
-    }
-
-    /** A command for the episode on screen: a download playing, or the site's player and page. */
-    void cmd(JSONObject c) {
-        if (player.isOpen() && player.cmd(c)) return;
-        pageCmd(c);
-    }
-
-    private void cmd(String name) {
-        cmd(App.obj("c", name));
-    }
-
-    /** A command for the page, even while a download plays over it. */
-    private void pageCmd(JSONObject c) {
-        if (web != null) web.evaluateJavascript("window.__anideck&&__anideck.cmd(" + c + ")", null);
-    }
-
-    private boolean hasPlayer() {
-        return state.optJSONObject("player") != null;
-    }
-
-    private void onState(String json) {
-        JSONObject s;
-        try {
-            s = new JSONObject(json);
-        } catch (JSONException e) {
+    /** Shows a page of the app (a route like "#/show/..."). */
+    void route(String r) {
+        if (r == null || !r.startsWith("#/")) return;
+        closePlayer();
+        if (login.isOpen()) login.close();
+        if (!pageReady) {
+            pendingRoute = r;
             return;
         }
-        pageState = s;
-        if (!player.isOpen()) show(s, json);
-        Shelf.get(this).played(s);
-        if (pendingFind != null && "search".equals(App.str(s, "page"))) {
-            App.put(pendingFind, "c", "find");
-            pageCmd(pendingFind);
-            pendingFind = null;
-        }
-        JSONObject p = s.optJSONObject("player");
-        if (playBefore > 0 && p != null && "watch".equals(App.str(s, "page"))) {
-            if (SystemClock.uptimeMillis() < playBefore) pageCmd(App.obj("c", "autoplay"));
-            playBefore = 0;
-        }
-        if (resumeAt >= 0 && p != null && p.optDouble("d", 0) > 0 && App.str(s, "url").equals(resumeUrl)) {
-            pageCmd(App.obj("c", "seek", "t", resumeAt, "play", true));
-            resumeAt = -1;
-        }
-        JSONObject pd = pendingDownload;
-        if (pd != null && SystemClock.uptimeMillis() > pd.optLong("until")) pendingDownload = null;
-        else if (pd != null && App.str(pd, "path").equals(App.str(s, "path")) && pd.optInt("ep") == s.optInt("ep") && !App.str(s, "dl").isEmpty()) {
-            pendingDownload = null;
-            pageCmd(App.obj("c", "download"));
-        }
-    }
-
-    /** Passes a state on to the bottom screen, CrossBar's Now Playing and the media controls. */
-    private void show(JSONObject s, String json) {
-        state = s;
-        App.I.state = json;
-        session.update(s);
-        App.I.toBottom("onState", json);
-    }
-
-    // ---- downloads ----
-
-    /** Plays a downloaded episode over the site, from the bottom screen, a notification or CrossBar. */
-    void playDownload(String id) {
-        JSONObject r = Downloads.get(this).get(id);
-        if (r == null || !"done".equals(App.str(r, "state"))) {
-            showToast("That download isn't on the Thor anymore");
-            return;
-        }
-        if (full != null) exitFull();
-        exitButton.setVisibility(View.GONE);
-        offline.setVisibility(View.GONE);
-        pageCmd(App.obj("c", "pause"));
-        player.open(r);
-    }
-
-    /** B or Close: back to the site, where it was. */
-    void closeDownload() {
-        if (!player.isOpen()) return;
-        player.close();
-        show(pageState, pageState.toString());
-        if (!App.I.net.online()) offline.setVisibility(View.VISIBLE);
-        if (web != null) web.requestFocus();
-    }
-
-    /** The offline player's state stands in for the page's while it's open. */
-    void playerState(JSONObject s) {
-        show(s, s.toString());
-    }
-
-    /** Retry on a failed download: its episode's page opens and its Download button is pressed again. */
-    void retryDownload(String id) {
-        JSONObject r = Downloads.get(this).get(id);
-        String path = r == null ? "" : App.str(r, "path");
-        int ep = r == null ? 0 : r.optInt("ep");
-        if (!path.startsWith("/watch/") || ep <= 0) return;
-        closeDownload();
-        if (path.equals(App.str(pageState, "path")) && ep == pageState.optInt("ep") && !App.str(pageState, "dl").isEmpty()) {
-            pageCmd(App.obj("c", "download"));
-            return;
-        }
-        go(path + "?ep=" + ep);
-        pendingDownload = App.obj("path", path, "ep", ep, "until", SystemClock.uptimeMillis() + 30000);
-    }
-
-    private final class Bridge {
-        @JavascriptInterface public void state(String key, String json) {
-            if (nonce.equals(key)) h.post(() -> onState(json));
-        }
-
-        @JavascriptInterface public void map(String key, String json) {
-            if (nonce.equals(key)) App.I.library.learn(json);
-        }
-
-        @JavascriptInterface public void token(String key, String jwt) {
-            if (nonce.equals(key)) App.I.library.offerToken(jwt);
-        }
-
-        @JavascriptInterface public void watched(String key, int id, int ep) {
-            if (nonce.equals(key)) App.I.library.watched(id, ep);
-        }
-
-        @JavascriptInterface public void notice(String key, String text) {
-            if (nonce.equals(key) && text != null) h.post(() -> showToast(text.length() > 90 ? text.substring(0, 90) : text));
-        }
-
-        @JavascriptInterface public String prefs(String key) {
-            return nonce.equals(key) ? App.I.pagePrefs().toString() : "{}";
-        }
-
-        /** The site's Download button: url is its file host's page for the episode on screen. */
-        @JavascriptInterface public void download(String key, String url) {
-            if (nonce.equals(key) && url != null) h.post(() -> Downloads.get(MainActivity.this).start(url, pageState));
-        }
-    }
-
-    // ---- navigation ----
-
-    /** Opens a show from a notification or the bottom screen: its watch page, found by AniList id. */
-    private boolean open(Intent i) {
-        if (i == null) return false;
-        String download = i.getStringExtra(EXTRA_DOWNLOAD);
-        if (download != null) {
-            playDownload(download);
-            return false;
-        }
-        int id = i.getIntExtra(EXTRA_OPEN, 0), ep = i.getIntExtra(EXTRA_EP, 0);
-        String path = i.getStringExtra(EXTRA_PATH);
-        if (id <= 0 && path != null && path.matches("/watch/[\\w.~%/-]+")) {
-            playBefore = ep > 0 ? SystemClock.uptimeMillis() + 30000 : 0;
-            go(path + (ep > 0 ? "?ep=" + ep : ""));
-            return true;
-        }
-        if (id <= 0) return false;
-        openAnime(id, ep, i.getStringExtra(EXTRA_TITLE));
-        return true;
-    }
-
-    /** ep > 0 opens that episode, 0 the show's first page, and a negative ep its info page. */
-    void openAnime(int id, int ep, String title) {
-        closeDownload();
-        playBefore = ep > 0 ? SystemClock.uptimeMillis() + 30000 : 0;
-        String path = App.I.library.path(id);
-        if (path != null) {
-            web.loadUrl(Site.url(ep < 0 ? path.replaceFirst("^/watch/", "/info/") : path + (ep > 0 ? "?ep=" + ep : "")));
-            return;
-        }
-        if (title == null || title.isEmpty()) {
-            JSONObject e = App.I.library.entry(id);
-            title = e == null ? null : App.str(e, "romaji");
-        }
-        if (title == null || title.isEmpty()) {
-            showToast("Couldn't find that show on the site");
-            return;
-        }
-        pendingFind = App.obj("a", id, "ep", ep);
-        web.loadUrl(Site.search(title));
-    }
-
-    void go(String path) {
-        closeDownload();
-        web.loadUrl(Site.url(path));
-    }
-
-    void search(String query) {
-        if (query == null || query.trim().isEmpty()) return;
-        closeDownload();
-        web.loadUrl(Site.search(query.trim()));
-    }
-
-    private void blocked(Uri u) {
-        Log.i(App.TAG, "blocked a jump to " + u.getHost());
-        long now = SystemClock.uptimeMillis();
-        if (now - lastBlockedNotice < 20000) return;
-        lastBlockedNotice = now;
-        showToast("Blocked a pop-up or redirect");
+        web.evaluateJavascript("window.app&&app.go(" + JSONObject.quote(r) + ")", null);
     }
 
     private final class Client extends WebViewClient {
         @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-            if (!r.isForMainFrame() || Site.allowed(r.getUrl())) return false;
-            blocked(r.getUrl());
-            return true;
+            return !HOST.equals(r.getUrl().getHost());
         }
 
-        @Override public void onPageStarted(WebView v, String url, Bitmap favicon) {
-            loadFailed = false;
-            offSite(url);
-        }
-
-        @Override public void onPageCommitVisible(WebView v, String url) {
-            injectNow(url);
+        @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+            Uri u = r.getUrl();
+            if (!HOST.equals(u.getHost()) || !"https".equals(u.getScheme())) return blocked();
+            List<String> seg = u.getPathSegments();
+            try {
+                if (seg.size() == 2 && "img".equals(seg.get(0))) {
+                    String src = u.getQueryParameter("u");
+                    File f = src == null ? null : Images.get(seg.get(1), src);
+                    return f == null ? notFound() : image(f);
+                }
+                if (seg.size() == 2 && "cover".equals(seg.get(0))) {
+                    File f = Shelf.get(MainActivity.this).coverFile(seg.get(1));
+                    return f == null || !f.isFile() ? notFound() : image(f);
+                }
+                String path = u.getPath() == null || "/".equals(u.getPath()) ? "/index.html" : u.getPath();
+                if (path.contains("..")) return notFound();
+                String asset = "/nav.js".equals(path) ? "www/nav.js" : "www/app" + path;
+                String ext = path.substring(path.lastIndexOf('.') + 1);
+                InputStream in = getAssets().open(asset);
+                WebResourceResponse res = new WebResourceResponse(TYPES.getOrDefault(ext, "application/octet-stream"), "utf-8", in);
+                res.setResponseHeaders(Map.of("Cache-Control", "no-store"));
+                return res;
+            } catch (IOException e) {
+                return notFound();
+            }
         }
 
         @Override public void onPageFinished(WebView v, String url) {
-            injectNow(url);
-        }
-
-        @Override public void doUpdateVisitedHistory(WebView v, String url, boolean reload) {
-            injectNow(url);
-            offSite(url);
-            Uri u = Uri.parse(url);
-            if (onSite(url) && !"/callback".equals(u.getPath())) App.I.prefs.edit().putString("lastUrl", url).apply();
-        }
-
-        @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
-            if (!r.isForMainFrame()) return;
-            loadFailed = true;
-            Log.w(App.TAG, "page failed to load: " + e.getDescription());
+            pageReady = true;
+            if (pendingRoute != null) {
+                String r = pendingRoute;
+                pendingRoute = null;
+                route(r);
+            }
         }
 
         @Override public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
-            Log.w(App.TAG, "the page's renderer stopped; reloading");
+            Log.w(App.TAG, "the top screen's renderer stopped; reloading");
             CoroBugs.rendererGone(MainActivity.this, "top", d.didCrash());
             App.I.pageCrashed = true;
             root.removeView(web);
@@ -436,50 +218,193 @@ public class MainActivity extends Activity implements Net.Listener {
         }
     }
 
-    private final class Chrome extends WebChromeClient {
-        @Override public void onShowCustomView(View view, CustomViewCallback done) {
-            if (full != null) {
-                done.onCustomViewHidden();
-                return;
-            }
-            full = view;
-            fullDone = done;
-            root.addView(view, new FrameLayout.LayoutParams(MATCH, MATCH));
-            offline.bringToFront();
-            toast.bringToFront();
-            exitButton.bringToFront();
+    private static WebResourceResponse image(File f) throws IOException {
+        WebResourceResponse res = new WebResourceResponse("image/jpeg", null, new FileInputStream(f));
+        res.setResponseHeaders(Map.of("Cache-Control", "max-age=86400"));
+        return res;
+    }
+
+    private static WebResourceResponse notFound() {
+        return new WebResourceResponse("text/plain", null, 404, "Not Found", Map.of(), new ByteArrayInputStream(new byte[0]));
+    }
+
+    private static WebResourceResponse blocked() {
+        return new WebResourceResponse("text/plain", null, 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
+    }
+
+    /** What the page's JavaScript can ask for. Only AniDeck's own page is ever loaded in this WebView. */
+    private final class Bridge {
+        /** Answers arrive later through app.reply(id, json). */
+        @JavascriptInterface public void call(int id, String method, String args) {
+            App.I.exec.execute(() -> {
+                String json = Api.call(method, args);
+                h.post(() -> {
+                    if (web != null) web.evaluateJavascript("window.app&&app.reply(" + id + "," + json + ")", null);
+                });
+            });
         }
 
-        @Override public void onHideCustomView() {
-            exitFull();
+        @JavascriptInterface public void play(String json) {
+            h.post(() -> {
+                try {
+                    playItem(new JSONObject(json));
+                } catch (JSONException e) {
+                    showToast("Couldn't open that episode");
+                }
+            });
         }
 
-        @Override public boolean onCreateWindow(WebView v, boolean dialog, boolean userGesture, Message result) {
-            blocked(Uri.parse("about:popup"));
-            return false;
+        @JavascriptInterface public void playDownload(String id) {
+            h.post(() -> MainActivity.this.playDownload(id));
         }
 
-        @Override public void onPermissionRequest(PermissionRequest r) {
-            r.deny();
+        @JavascriptInterface public void toast(String text) {
+            if (text != null) h.post(() -> showToast(text.length() > 140 ? text.substring(0, 140) : text));
         }
 
-        @Override public Bitmap getDefaultVideoPoster() {
-            return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+        /** A real tap for the controller's A on a text field, so the keyboard opens. */
+        @JavascriptInterface public void tap(float x, float y) {
+            h.post(() -> {
+                if (web != null) Pad.tap(web, x, y);
+            });
         }
 
-        @Override public boolean onConsoleMessage(ConsoleMessage m) {
-            if (App.I.prefs.getBoolean("dev", false)) Log.d(App.TAG, "console: " + m.message());
-            return true;
+        @JavascriptInterface public void login() {
+            h.post(MainActivity.this::startLogin);
+        }
+
+        @JavascriptInterface public void signOut() {
+            App.I.library.signOut();
+        }
+
+        @JavascriptInterface public void useName(String name) {
+            App.I.library.useName(name);
+        }
+
+        @JavascriptInterface public void exit() {
+            h.post(() -> moveTaskToBack(true));
+        }
+
+        @JavascriptInterface public String info() {
+            return App.obj("version", App.I.versionName(), "net", App.I.net.online(), "dev", App.I.prefs.getBoolean("dev", false),
+                    "bottom", App.I.bottom != null).toString();
         }
     }
 
-    private void exitFull() {
-        if (full == null) return;
-        root.removeView(full);
-        full = null;
-        if (fullDone != null) fullDone.onCustomViewHidden();
-        fullDone = null;
-        web.requestFocus();
+    // ---- playing ----
+
+    /** From the page: {source, sourceName, anime, episodes, index, a}. A downloaded copy plays from the Thor. */
+    void playItem(JSONObject item) {
+        if (login.isOpen()) login.close();
+        String key = Shelf.key(App.str(item, "source"), App.str(item.optJSONObject("anime"), "url"));
+        App.put(item, "key", key);
+        JSONObject ep = item.optJSONArray("episodes") == null ? null : item.optJSONArray("episodes").optJSONObject(item.optInt("index"));
+        JSONObject d = ep == null ? null : Downloads.get(this).find(key, App.str(ep, "url"));
+        offline.setVisibility(View.GONE);
+        if (d != null && "done".equals(App.str(d, "state"))) player.openDownload(d);
+        else player.open(item);
+        App.I.pad.use(Pad.TOP, false);
+    }
+
+    /** Plays a downloaded episode, from either screen, a notification or CrossBar. */
+    void playDownload(String id) {
+        JSONObject r = Downloads.get(this).get(id);
+        if (r == null || !"done".equals(App.str(r, "state"))) {
+            showToast("That download isn't on the Thor anymore");
+            return;
+        }
+        if (login.isOpen()) login.close();
+        offline.setVisibility(View.GONE);
+        player.openDownload(r);
+    }
+
+    /** B or Close: back to the page underneath. */
+    void closePlayer() {
+        if (!player.isOpen()) return;
+        player.close();
+        playerState(App.obj("page", "browse", "player", JSONObject.NULL));
+        toTop("playerClosed", "{}");
+        if (!App.I.net.online()) offline.setVisibility(View.VISIBLE);
+        if (web != null) web.requestFocus();
+    }
+
+    /** The player's state, for the bottom screen, the media controls and CrossBar. */
+    void playerState(JSONObject s) {
+        String json = s.toString();
+        App.I.state = json;
+        session.update(s);
+        App.I.toBottom("onState", json);
+    }
+
+    JSONObject state() {
+        try {
+            return new JSONObject(App.I.state);
+        } catch (JSONException e) {
+            return new JSONObject();
+        }
+    }
+
+    /** A command for the episode on screen, from the bottom screen or the media controls. */
+    void cmd(JSONObject c) {
+        player.cmd(c);
+    }
+
+    /** AniList login, from Settings on either screen. */
+    void startLogin() {
+        if (player.isOpen()) closePlayer();
+        login.open();
+    }
+
+    void loginClosed() {
+        if (web != null) web.requestFocus();
+    }
+
+    // ---- opening things ----
+
+    private void open(Intent i) {
+        if (i == null) return;
+        String download = i.getStringExtra(EXTRA_DOWNLOAD);
+        String show = i.getStringExtra(EXTRA_SHOW);
+        String route = i.getStringExtra(EXTRA_ROUTE);
+        int id = i.getIntExtra(EXTRA_OPEN, 0);
+        if (download != null) playDownload(download);
+        else if (show != null) openShow(show, i.getBooleanExtra(EXTRA_RESUME, false));
+        else if (id > 0) openAniList(id, i.getIntExtra(EXTRA_EP, 0), i.getStringExtra(EXTRA_TITLE));
+        else if (route != null) route(route);
+    }
+
+    /** A show from the history or saved shows; resume plays its last episode where it stopped, or the next one. */
+    void openShow(String key, boolean resume) {
+        JSONObject s = Shelf.get(this).show(key);
+        if (s == null) {
+            showToast("That show isn't on the Thor anymore");
+            return;
+        }
+        if (App.str(s, "source").isEmpty()) {
+            JSONObject last = s.optJSONObject("last");
+            int ep = last == null ? 0 : (int) last.optDouble("num", 0);
+            openAniList(s.optInt("a"), resume ? ep : 0, App.str(s, "title"));
+            return;
+        }
+        route("#/show/" + App.str(s, "source") + "/" + Uri.encode(App.str(s, "url")) + (resume ? "?resume=1" : ""));
+    }
+
+    /** A show from AniList (lists, notifications): its linked show, else a search of the sources. ep > 0 plays that episode. */
+    void openAniList(int id, int ep, String title) {
+        String key = Shelf.get(this).keyFor(id);
+        if (key != null) {
+            JSONObject s = Shelf.get(this).show(key);
+            route("#/show/" + App.str(s, "source") + "/" + Uri.encode(App.str(s, "url")) + (ep > 0 ? "?ep=" + ep : ""));
+            return;
+        }
+        StringBuilder q = new StringBuilder();
+        if (ep > 0) q.append("ep=").append(ep);
+        if (title != null && !title.isEmpty()) q.append(q.length() > 0 ? "&" : "").append("title=").append(Uri.encode(title));
+        route("#/anilist/" + id + (q.length() > 0 ? "?" + q : ""));
+    }
+
+    void search(String query) {
+        if (query != null && !query.trim().isEmpty()) route("#/search?q=" + Uri.encode(query.trim()));
     }
 
     // ---- controller ----
@@ -493,191 +418,103 @@ public class MainActivity extends Activity implements Net.Listener {
     }
 
     @Override public boolean dispatchTouchEvent(MotionEvent e) {
-        if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
-            App.I.pad.touched(Pad.TOP);
-            // The offline player has its own Close button.
-            if (filling() && !player.isOpen()) showExit();
-        }
+        if (e.getActionMasked() == MotionEvent.ACTION_DOWN) App.I.pad.touched(Pad.TOP);
         return super.dispatchTouchEvent(e);
     }
 
-    /** An episode fills the screen (fill-screen mode, the player's own fullscreen or a download playing). */
+    /** An episode fills the screen, so the controller stays with it. */
     boolean filling() {
-        return player.isOpen() || full != null || state.optBoolean("theater");
+        return player.isOpen();
     }
 
-    /** The touch way out of fill-screen mode, shown for a few seconds after touching the screen. */
-    private void showExit() {
-        exitButton.setVisibility(View.VISIBLE);
-        exitButton.bringToFront();
-        h.removeCallbacks(hideExit);
-        h.postDelayed(hideExit, 3500);
-    }
-
-    /** D-pad and left stick on this screen: they move the highlight, or seek and change volume in fill-screen mode. */
+    /** D-pad and left stick on this screen: the page's highlight, the player's menu, or seek and volume. */
     void nav(String dir) {
-        boolean sideways = "left".equals(dir) || "right".equals(dir);
-        if (filling()) {
-            if (sideways && hasPlayer()) cmd(App.obj("c", "seekBy", "d", "left".equals(dir) ? -10 : 10));
-            else if (!sideways) getSystemService(AudioManager.class).adjustStreamVolume(AudioManager.STREAM_MUSIC,
+        if (login.isOpen()) return;
+        if (player.isOpen()) {
+            if (player.nav(dir)) return;
+            boolean sideways = "left".equals(dir) || "right".equals(dir);
+            if (sideways) player.cmd(App.obj("c", "seekBy", "d", "left".equals(dir) ? -10 : 10));
+            else getSystemService(AudioManager.class).adjustStreamVolume(AudioManager.STREAM_MUSIC,
                     "up".equals(dir) ? AudioManager.ADJUST_RAISE : AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI);
-        } else if (sideways && state.optBoolean("typing")) {
-            key("left".equals(dir) ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT);
-        } else {
-            cmd(App.obj("c", "nav", "d", dir));
+            return;
         }
+        js("app.nav(" + JSONObject.quote(dir) + ")");
     }
 
-    /** A: taps the highlighted item. With nothing highlighted it plays or pauses the episode. */
+    /** A: chooses the highlighted item, or plays and pauses. */
     void ok() {
-        if (filling() || (!state.optBoolean("nav") && hasPlayer())) {
-            if (hasPlayer()) cmd("toggle");
-        } else if (state.optBoolean("typing")) {
-            key(KeyEvent.KEYCODE_ENTER);
-        } else {
-            web.evaluateJavascript("window.__anideck&&__anideck.ok()", r -> {
-                try {
-                    JSONObject p = new JSONObject(r);
-                    Pad.tap(web, (float) p.getDouble("x"), (float) p.getDouble("y"));
-                } catch (JSONException ignored) {
-                    // Nothing to tap: the highlight only just appeared, or A played the episode.
-                }
-            });
-        }
+        if (login.isOpen()) return;
+        if (player.isOpen()) player.ok();
+        else js("app.ok()");
     }
 
     void highlight(boolean show) {
-        if (show && filling()) return;
-        cmd(App.obj("c", "nav", "d", show ? "show" : "hide"));
+        if (!player.isOpen() && !login.isOpen()) js("app.pad(" + show + ")");
     }
 
     void scrollPage(int dy) {
-        if (!filling()) web.evaluateJavascript("scrollBy(0," + dy + ")", null);
+        if (!player.isOpen() && !login.isOpen()) js("app.scroll(" + dy + ")");
     }
 
     /** Start, X, Y, L1/R1 and L2/R2 control the episode from either screen. */
     boolean playerKey(KeyEvent e) {
-        if (!hasPlayer()) return false;
+        if (!player.isOpen()) return false;
         int k = e.getKeyCode();
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN, first = down && e.getRepeatCount() == 0;
         switch (k) {
             case KeyEvent.KEYCODE_BUTTON_START:
-                if (first) cmd("toggle");
+                if (first) player.cmd(App.obj("c", "toggle"));
                 return true;
             case KeyEvent.KEYCODE_BUTTON_X:
-                if (first) cmd("skip");
+                if (first) player.cmd(App.obj("c", "skip"));
                 return true;
             case KeyEvent.KEYCODE_BUTTON_Y:
-                if (first) cmd("theater");
+                if (first) player.cmd(App.obj("c", "menu"));
                 return true;
             case KeyEvent.KEYCODE_BUTTON_L1:
             case KeyEvent.KEYCODE_BUTTON_R1:
-                if (down) cmd(App.obj("c", "seekBy", "d", k == KeyEvent.KEYCODE_BUTTON_L1 ? -10 : 10));
+                if (down) player.cmd(App.obj("c", "seekBy", "d", k == KeyEvent.KEYCODE_BUTTON_L1 ? -10 : 10));
                 return true;
             case KeyEvent.KEYCODE_BUTTON_L2:
             case KeyEvent.KEYCODE_BUTTON_R2:
-                if (first) cmd(k == KeyEvent.KEYCODE_BUTTON_L2 ? "prev" : "next");
+                if (first) player.cmd(App.obj("c", k == KeyEvent.KEYCODE_BUTTON_L2 ? "prev" : "next"));
                 return true;
             default:
                 return false;
         }
     }
 
-    /** A key press straight to the page (caret moves, Enter, Escape), not through Pad. */
-    private void key(int code) {
-        long t = SystemClock.uptimeMillis();
-        web.dispatchKeyEvent(new KeyEvent(t, t, KeyEvent.ACTION_DOWN, code, 0));
-        web.dispatchKeyEvent(new KeyEvent(t, t, KeyEvent.ACTION_UP, code, 0));
-    }
-
-    /** B or Back: closes what's open (keyboard, menus, fill-screen) before going back a page. */
+    /** B or Back: the player's menu, the player, the login, then the page's own back; at Home it leaves the app. */
     void back() {
-        JSONObject menu = state.optJSONObject("menu");
-        long now = SystemClock.uptimeMillis();
-        if (player.isOpen()) closeDownload();
-        else if (full != null) exitFull();
-        else if (state.optBoolean("typing")) cmd("blur");
-        else if (menu != null) cmd(App.obj("c", "menu", "label", App.str(menu, "label")));
-        // Escape closes the site's menus; if one ignores it, the next B goes on.
-        else if (state.optBoolean("popup") && now - escAt > 1500) {
-            escAt = now;
-            key(KeyEvent.KEYCODE_ESCAPE);
-            // The site puts focus back on the menu's button, with its own outline next to the highlight.
-            h.postDelayed(() -> cmd("blur"), 350);
+        if (player.isOpen()) {
+            if (!player.back()) closePlayer();
+        } else if (login.isOpen()) {
+            login.back();
+        } else if (web != null) {
+            web.evaluateJavascript("window.app?app.back():false", r -> {
+                if (!"true".equals(r)) moveTaskToBack(true);
+            });
         }
-        else if (state.optBoolean("theater")) pageCmd(App.obj("c", "theater", "on", false));
-        else if (!backOnSite()) {
-            if (onSite(web.getUrl())) moveTaskToBack(true);
-            else web.loadUrl(startUrl());
-        }
-    }
-
-    /**
-     * Goes back to the previous site page, past the login pages (AniList and the site's /callback).
-     * WebView's goBack() and goBackOrForward() skip pages that were left without a tap (Chrome's
-     * history intervention), as they are when the app logs in or opens a show from the bottom
-     * screen; history.go() run by the page itself doesn't.
-     */
-    private boolean backOnSite() {
-        WebBackForwardList list = web.copyBackForwardList();
-        int cur = list.getCurrentIndex();
-        String from = web.getUrl();
-        for (int i = cur - 1; i >= 0; i--) {
-            String url = list.getItemAtIndex(i).getUrl();
-            if (onSite(url) && !"/callback".equals(Uri.parse(url).getPath())) {
-                web.evaluateJavascript("history.go(" + (i - cur) + ")", null);
-                h.postDelayed(() -> {
-                    if (from != null && from.equals(web.getUrl())) web.loadUrl(url);
-                }, 1500);
-                return true;
-            }
-        }
-        return false;
     }
 
     @Override public void onBackPressed() {
         back();
     }
 
+    private void js(String code) {
+        if (web != null && pageReady) web.evaluateJavascript("window.app&&" + code, null);
+    }
+
     // ---- connection ----
 
-    /** Downloads play on without a connection; only the site's player waits for it. */
     @Override public void onNet(boolean online) {
         offline.setVisibility(online || player.isOpen() ? View.GONE : View.VISIBLE);
         App.I.toBottom("onNet", String.valueOf(online));
-        h.removeCallbacks(checkResumed);
-        if (!online) {
-            JSONObject p = pageState.optJSONObject("player");
-            if (p != null && "playing".equals(App.str(p, "state"))) {
-                resumeOnNet = true;
-                pageCmd(App.obj("c", "pause"));
-            }
-            return;
+        toTop("net", String.valueOf(online));
+        if (online) {
+            App.I.library.syncIfStale();
+            player.onNet(true);
         }
-        App.I.library.syncIfStale();
-        if (loadFailed) {
-            web.reload();
-        } else if (resumeOnNet) {
-            resumeOnNet = false;
-            if (player.isOpen()) return;
-            pageCmd(App.obj("c", "play"));
-            h.postDelayed(checkResumed, 8000);
-        }
-    }
-
-    /** After a reconnect: a stream that gave up while offline reloads and continues at the same spot. */
-    private void checkResumed() {
-        JSONObject p = pageState.optJSONObject("player");
-        if (p == null || player.isOpen()) return;
-        String ps = App.str(p, "state");
-        if ("playing".equals(ps)) return;
-        if ("paused".equals(ps)) {
-            pageCmd(App.obj("c", "play"));
-            return;
-        }
-        resumeAt = p.optDouble("t", 0);
-        resumeUrl = App.str(pageState, "url");
-        web.reload();
     }
 
     // ---- screens ----
@@ -698,10 +535,7 @@ public class MainActivity extends Activity implements Net.Listener {
         return d != null && d.getDisplayId() != Display.DEFAULT_DISPLAY;
     }
 
-    /**
-     * After a move between the screens. On the bottom screen the episode fills it and there's no
-     * companion, which would cover it; back on the top both return to how they were.
-     */
+    /** On the bottom screen (moved there by CrossBar) there's no companion, which would cover it. */
     private void screenChanged() {
         Display d = getDisplay();
         int id = d == null ? Display.DEFAULT_DISPLAY : d.getDisplayId();
@@ -710,10 +544,7 @@ public class MainActivity extends Activity implements Net.Listener {
         if (id != Display.DEFAULT_DISPLAY) {
             BottomActivity b = App.I.bottom;
             if (b != null) b.finish();
-            theaterBefore = pageState.optBoolean("theater");
-            if (!theaterBefore) pageCmd(App.obj("c", "theater", "on", true));
         } else {
-            if (!theaterBefore && pageState.optBoolean("theater")) pageCmd(App.obj("c", "theater", "on", false));
             ensureBottom();
         }
         hideSystemUi();
@@ -739,7 +570,7 @@ public class MainActivity extends Activity implements Net.Listener {
         App.I.topVisible = false;
         if (isChangingConfigurations()) return;
         // Leaving the app or turning the screen off pauses the episode and hands the bottom screen back.
-        cmd("pause");
+        player.cmd(App.obj("c", "pause"));
         if (web != null) web.onPause();
         BottomActivity b = App.I.bottom;
         if (b != null) b.finish();
@@ -748,6 +579,7 @@ public class MainActivity extends Activity implements Net.Listener {
     @Override protected void onDestroy() {
         App.I.net.unlisten(this);
         player.close();
+        login.close();
         session.release();
         if (App.I.top == this) App.I.top = null;
         if (web != null) web.destroy();

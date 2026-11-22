@@ -32,9 +32,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
- * The user's AniList anime lists (through the site's login, or a public username), new-episode
- * tracking and notifications, progress updates, and the map from AniList ids to the site's
- * watch pages (the site's own ids are opaque).
+ * The user's AniList anime lists (through an AniList login, or a public username), new-episode
+ * tracking and notifications, progress updates, and title search for linking a source's shows.
  */
 final class Library {
     static final String[] STATUSES = {"CURRENT", "REPEATING", "COMPLETED", "PAUSED", "PLANNING", "DROPPED"};
@@ -47,13 +46,14 @@ final class Library {
     private static final String USER = "query ($name: String) { User(name: $name) { id name avatar { medium } } }";
     private static final String MEDIA = "query ($id: Int) { Media(id: $id, type: ANIME) { " + MEDIA_FIELDS
             + " genres averageScore mediaListEntry { status progress } } }";
+    private static final String SEARCH = "query ($q: String) { Page(perPage: 12) { media(search: $q, type: ANIME, sort: SEARCH_MATCH) { "
+            + MEDIA_FIELDS.replace("title { userPreferred romaji english }", "title { userPreferred romaji english native }")
+            + " synonyms mediaListEntry { status progress } } } }";
     private static final String ENTRY = "query ($userId: Int, $mediaId: Int) { MediaList(userId: $userId, mediaId: $mediaId) { status progress } }";
     private static final String SAVE = "mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus) {"
             + " SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status) { status progress } }";
     /** Lists older than this refresh when the app opens; the background job runs every 30 minutes. */
     private static final long STALE_MS = 10 * 60_000L;
-    private static final int MAX_PATHS = 3000;
-    private static final Pattern WATCH_PATH = Pattern.compile("^/watch/[A-Za-z0-9_-]{8,64}/[A-Za-z0-9-]{1,160}$");
 
     private final App app;
     private final File file;
@@ -64,7 +64,6 @@ final class Library {
     private final Set<String> marked = ConcurrentHashMap.newKeySet();
     private JSONObject lists;       // guarded by this: status -> [entry]
     private long updated;           // guarded by this
-    private JSONObject paths;       // guarded by this: AniList id -> site watch path
     private volatile boolean syncing;
     private volatile String error;
 
@@ -79,11 +78,6 @@ final class Library {
             if (l != null) lists = l;
             updated = j.optLong("updated");
         } catch (IOException | JSONException ignored) {
-        }
-        try {
-            paths = new JSONObject(app.prefs.getString("paths", "{}"));
-        } catch (JSONException e) {
-            paths = new JSONObject();
         }
     }
 
@@ -101,6 +95,14 @@ final class Library {
         String name = app.prefs.getString("uname", null);
         if (name == null) return null;
         return App.obj("name", name, "avatar", app.prefs.getString("avatar", ""), "via", token() != null ? "site" : "user");
+    }
+
+    /** A token from Connect AniList: taken even if it's the one Disconnect set aside. */
+    void login(String jwt) {
+        if (jwt == null) return;
+        rejected.remove(hash(jwt));
+        app.prefs.edit().remove("ignoredToken").apply();
+        offerToken(jwt);
     }
 
     /** A token found in the site's storage once the user logged in there. */
@@ -193,7 +195,9 @@ final class Library {
     }
 
     private void push() {
-        app.toBottom("onLibrary", json());
+        String j = json();
+        app.toBottom("onLibrary", j);
+        app.toTop("library", j);
     }
 
     void syncIfStale() {
@@ -229,7 +233,7 @@ final class Library {
         } catch (AniList.Error e) {
             if (token != null && (e.code == 400 || e.code == 401) && e.getMessage().toLowerCase().contains("token")) {
                 signOut();
-                error = "Your AniList login expired. Log in to the site again.";
+                error = "Your AniList login expired. Log in again in Settings.";
                 return true;
             }
             error = e.getMessage();
@@ -438,34 +442,26 @@ final class Library {
         }
     }
 
-    // ---- AniList id -> site page ----
+    // ---- search ----
 
-    synchronized String path(int id) {
-        String p = App.str(paths, String.valueOf(id));
-        return p.isEmpty() ? null : p;
-    }
-
-    /** Pairs the page script saw on the site (cards and the current page) of AniList id and watch path. */
-    void learn(String json) {
-        JSONObject add;
-        try {
-            add = new JSONObject(json);
-        } catch (JSONException e) {
-            return;
+    /** AniList's matches for a title, with every name it goes by, for linking a source's show to its entry. */
+    JSONArray search(String q) throws IOException {
+        JSONArray out = new JSONArray();
+        if (q == null || q.trim().isEmpty()) return out;
+        JSONObject d = AniList.query(SEARCH, App.obj("q", q.trim()), token());
+        JSONObject page = d == null ? null : d.optJSONObject("Page");
+        JSONArray ms = page == null ? null : page.optJSONArray("media");
+        for (int i = 0; ms != null && i < ms.length(); i++) {
+            JSONObject m = ms.optJSONObject(i);
+            JSONObject o = compact(m, m == null ? null : m.optJSONObject("mediaListEntry"));
+            if (o == null) continue;
+            JSONObject t = m.optJSONObject("title");
+            App.put(o, "native", App.str(t, "native"));
+            App.put(o, "synonyms", m.optJSONArray("synonyms") == null ? new JSONArray() : m.optJSONArray("synonyms"));
+            media.put(o.optInt("id"), o);
+            out.put(o);
         }
-        synchronized (this) {
-            boolean changed = false;
-            for (Iterator<String> it = add.keys(); it.hasNext(); ) {
-                String k = it.next(), v = add.optString(k);
-                if (!k.matches("\\d{1,9}") || !WATCH_PATH.matcher(v).matches() || v.equals(paths.optString(k))) continue;
-                paths.remove(k);
-                App.put(paths, k, v);
-                changed = true;
-            }
-            if (!changed) return;
-            while (paths.length() > MAX_PATHS) paths.remove(paths.keys().next());
-            app.prefs.edit().putString("paths", paths.toString()).apply();
-        }
+        return out;
     }
 
     // ---- helpers ----

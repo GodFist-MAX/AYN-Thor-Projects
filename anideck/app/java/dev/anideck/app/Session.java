@@ -2,12 +2,15 @@ package dev.anideck.app;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.SystemClock;
 
 import org.json.JSONObject;
+
+import java.io.File;
 
 /**
  * Publishes the episode on the top screen as a media session: system media controls work,
@@ -19,8 +22,7 @@ final class Session {
             | PlaybackState.ACTION_REWIND | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
 
     private final MediaSession s;
-    private String meta = "";
-    private int artId, artLoading;
+    private String meta = "", artKey = "", artLoading = "";
     private Bitmap art;
     private JSONObject last = new JSONObject();
     private int lastState = -1;
@@ -80,12 +82,14 @@ final class Session {
             lastState = -1;
             return;
         }
+        String coverName = App.str(st, "cover");
         int id = st.optInt("anilistId");
-        if (id > 0 && id != artId && id != artLoading) loadArt(id);
+        String artWanted = !coverName.isEmpty() ? coverName : id > 0 ? "a" + id : "";
+        if (!artWanted.isEmpty() && !artWanted.equals(artKey) && !artWanted.equals(artLoading)) loadArt(artWanted, coverName, id);
         String title = App.str(st, "show"), epTitle = App.str(st, "epTitle");
-        String sub = "Episode " + st.optInt("ep") + (epTitle.isEmpty() ? "" : " · " + epTitle);
+        String sub = "Episode " + VideoPlayer.numLabel(st.optDouble("ep", 0)) + (epTitle.isEmpty() ? "" : " · " + epTitle);
         long duration = (long) (p.optDouble("d", 0) * 1000);
-        Bitmap cover = id > 0 && id == artId ? art : null;
+        Bitmap cover = !artWanted.isEmpty() && artWanted.equals(artKey) ? art : null;
         String key = title + '|' + sub + '|' + duration / 1000 + '|' + (cover != null);
         if (!key.equals(meta)) {
             meta = key;
@@ -120,16 +124,23 @@ final class Session {
         if (!s.isActive()) s.setActive(true);
     }
 
-    private void loadArt(int id) {
-        artLoading = id;
+    /** The show's cover kept on the Thor, else AniList's. */
+    private void loadArt(String key, String coverName, int id) {
+        artLoading = key;
         App.I.io.execute(() -> {
-            JSONObject info = App.I.library.details(id);
-            Bitmap b = info == null ? null : Library.bitmap(App.str(info, "cover"), 512);
+            Bitmap b = null;
+            File f = coverName.isEmpty() ? null : Shelf.get(App.I).coverFile(coverName);
+            if (f != null && f.isFile()) b = BitmapFactory.decodeFile(f.getPath());
+            if (b == null && id > 0) {
+                JSONObject info = App.I.library.details(id);
+                b = info == null ? null : Library.bitmap(App.str(info, "cover"), 512);
+            }
+            Bitmap got = b;
             App.I.main.post(() -> {
-                if (artLoading != id) return;
-                artLoading = 0;
-                artId = id;
-                art = b;
+                if (!key.equals(artLoading)) return;
+                artLoading = "";
+                artKey = key;
+                art = got;
                 meta = "";
                 update(last);
             });

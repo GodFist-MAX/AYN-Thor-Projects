@@ -5,7 +5,7 @@ Software I made for my AYN Thor with [Grok Build](https://x.ai/cli). The Thor is
 | Project | What it is |
 |---|---|
 | [CrossBar](crossbar-launcher/) | A PSP/PS3 XMB-style home launcher for both screens, with a game library, emulator launching, and 30/60 FPS presets |
-| [AniDeck](anideck/) | A two-screen app for watching anime on miruro.cx, with controller support and AniList lists |
+| [AniDeck](anideck/) | A two-screen anime app built on Aniyomi extensions, with its own player, offline downloads, controller support and AniList lists |
 | [Coronamon](coronamon/) | An on-screen companion that installs, updates and watches over the apps made for the Thor |
 | [Turnip drivers](turnip-drivers/) | Thor-tuned Mesa Turnip v39 Vulkan drivers, packaged for AdrenoTools |
 | [Naruto port English toolkit](naruto-port-english/) | Translates the Naruto Storm Generations port's launcher to English |
@@ -23,7 +23,7 @@ Commits are in the order the projects were last updated, and each is dated to wh
 - **2026-11-15:** checks in with Grok Build each time the Thor is plugged in and hands new bugs to automatic fix runs
 - **2026-11-16:** Coronamon: adds a Grok Build page to the Den with buttons to check status, pause or resume automatic runs, turn them off or on, stop the cu…; Downloads: save episodes on the Thor and watch them offline; Updates install on the Thor again
 - **2026-11-18:** Coronamon gets a Grok brain: chat in the Den's Talk tab, plus fresh lines every day
-- **2026-11-21:** CrossBar: video › Folders now shows the real folder tree, with internal storage and the SD card merged (show and season folders, episodes i…
+- **2026-11-21:** CrossBar: video › Folders now shows the real folder tree, with internal storage and the SD card merged (show and season folders, episodes i…; AniDeck 2.0: a native app on Aniyomi extensions, with its own player and offline downloads
 
 ## Building
 

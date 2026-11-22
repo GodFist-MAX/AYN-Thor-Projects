@@ -25,7 +25,6 @@ public class SyncJob extends JobService {
     }
 
     @Override public boolean onStartJob(JobParameters params) {
-        Shelf.get(this).refresh();
         App.I.io.execute(() -> jobFinished(params, !App.I.library.syncNow(false)));
         return true;
     }

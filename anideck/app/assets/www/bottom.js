@@ -3,17 +3,24 @@
 // arrive through window.deck; touches become commands for the top screen.
 const D = window.Deck;
 const S = {
-  tab: 'now', state: {}, lib: { lists: {} }, net: true, settings: {}, media: {}, version: '',
-  shelf: { recent: [], saved: [] }, listTab: 'CURRENT', range: 0, rate: 1, dragging: false, expectNav: false,
-  // Downloads: the list from Downloads.java, download speeds by id, the subtitle sheet, a Delete waiting for its second press.
-  dls: { items: [] }, speed: {}, dlAt: 0, subSheet: false, confirmDl: '',
+  tab: 'now', state: {}, eps: [], lib: { lists: {} }, net: true, settings: {}, media: {}, version: '',
+  shelf: { recent: [], saved: [] }, listTab: 'CURRENT', range: 0, dragging: false,
+  // Downloads: the list from Downloads.java, download speeds by id, a Delete waiting for its second press.
+  dls: { items: [] }, speed: {}, dlAt: 0, confirmDl: '',
+  // The open sheet: server, sub, audio (the episode playing) or pick:<setting>.
+  sheet: '',
 };
-const RATES = [1, 1.25, 1.5, 2, 0.75];
+const DONE = 0.85;
 const TITLES = { now: 'Now Playing', next: 'Up Next', schedule: 'Schedule', lists: 'Lists', browse: 'Browse', downloads: 'Downloads', settings: 'Settings' };
 const LIST_NAMES = { CURRENT: 'Watching', REPEATING: 'Rewatching', COMPLETED: 'Completed', PAUSED: 'Paused', PLANNING: 'Planning', DROPPED: 'Dropped' };
 const STATUS_NAMES = { RELEASING: 'Airing', FINISHED: 'Finished', NOT_YET_RELEASED: 'Upcoming', HIATUS: 'On hiatus', CANCELLED: 'Cancelled' };
-// Tags on the site's server choices.
-const SERVER_TAGS = { 's-sub': 'Soft subs', 'h-sub': 'Hard subs', embed: 'Embedded player', dl: 'Downloads' };
+// The same choices as the top screen's Settings.
+const PICKS = {
+  subLang: [['en', 'English'], ['es', 'Spanish'], ['pt', 'Portuguese'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['ar', 'Arabic'], ['ru', 'Russian'], ['id', 'Indonesian'], ['tr', 'Turkish'], ['ja', 'Japanese']],
+  audioLang: [['ja', 'Japanese (original)'], ['en', 'English (dub)'], ['es', 'Spanish'], ['pt', 'Portuguese'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian']],
+  dlQuality: [['360', '360p'], ['480', '480p'], ['720', '720p'], ['1080', '1080p'], ['2160', 'Best available']],
+};
+const PICK_TITLES = { subLang: 'Subtitles', audioLang: 'Audio', dlQuality: 'Download quality' };
 const I = {
   play: '<svg viewBox="0 0 24 24"><path class="fill" d="M8 5.5v13l10.5-6.5z"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><path class="fill" d="M7 5h3.6v14H7zM13.4 5H17v14h-3.6z"/></svg>',
@@ -33,13 +40,28 @@ const info = (id) => entry(id) || S.media[id] || {};
 const pct = (e) => (e.episodes ? Math.min(100, Math.round((e.progress / e.episodes) * 100)) : 0);
 const watched = (e) => (e.episodes ? `${e.progress} of ${e.episodes} watched` : `${e.progress} watched · ${e.aired} aired`);
 const caughtUp = (e) => e.progress >= (e.aired || 0) && !!(e.aired || e.nextAt);
-// Saved and recently played shows (kept on the Thor, covers included, so they show offline).
-const isSaved = (id) => !!id && S.shelf.saved.some((e) => e.id === id);
-const shelfCover = (e) => (e.id > 0 ? `https://shelf.anideck/cover/${e.id}` : e.cover || '');
+const playing = () => S.state.page === 'watch';
+// Saved and recently watched shows are kept on the Thor, covers included, so they show offline.
+const coverSrc = (name) => (name ? `https://shelf.anideck/cover/${name}` : '');
+// Pictures from a source, fetched with its headers and cached by the app.
+const viaApp = (source, url) => (url ? `https://shelf.anideck/img/${encodeURIComponent(source || '0')}?u=${encodeURIComponent(url)}` : '');
+const shelfImg = (b) => coverSrc(b.cover) || viaApp(b.source, b.coverUrl);
+const isSaved = (key) => !!key && S.shelf.saved.some((b) => b.key === key);
+const nextOf = (b) => {
+  const l = b.last;
+  return l ? { done: l.d > 0 && l.t >= l.d * DONE, num: l.num, t: l.t, d: l.d, name: l.name } : null;
+};
 
 // ---- formatting ----
 
 const pad = (n) => String(n).padStart(2, '0');
+const numLabel = (n) => (n == null || n < 0 || Number.isNaN(+n) ? '' : String(Math.round(n * 100) / 100));
+// An episode's own title, without a repeat of its number ("Episode 3 - …").
+const bareTitle = (t) => {
+  const s = String(t || '').trim().replace(/^(episode|ep\.?|e)\s*[\d.]+\s*[:\-–—]?\s*/i, '').trim();
+  return /^[\d.]*$/.test(s) ? '' : s;
+};
+const rateLabel = (r) => String(Math.round((r || 1) * 100) / 100);
 const clock = (t) => {
   t = Math.max(0, Math.floor(t || 0));
   const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
@@ -89,6 +111,11 @@ window.deck = {
     S.state = s || {};
     stateChanged(prev);
   },
+  // The show's episodes for the strip: {i, n, name, w} streaming, {dl, n, name, w} for downloads.
+  onEpisodes(list) {
+    S.eps = Array.isArray(list) ? list : [];
+    if (S.tab === 'now' && !S.dragging) render();
+  },
   onLibrary(l) {
     S.lib = l || { lists: {} };
     badge();
@@ -112,9 +139,12 @@ window.deck = {
     if (S.tab === 'now') render();
   },
   onDownloads: (j) => dlUpdate(j),
+  // Extensions are listed on the top screen.
+  onSources() {},
   onBack() {
-    if (S.tab === 'now') return;
-    S.tab = 'now';
+    if (S.sheet) S.sheet = '';
+    else if (S.tab !== 'now') S.tab = 'now';
+    else return;
     render();
   },
   toast,
@@ -133,23 +163,26 @@ window.deck = {
   },
 };
 
+// Which episode is on: a show's episode, or a download.
+const epId = (s) => (s.page !== 'watch' ? '' : s.offline ? 'dl:' + s.download : s.key + '#' + s.epIndex);
+
+// Everything Now Playing shows except the time, which moves on its own.
 const shape = (s) => {
-  const p = s.player;
-  return [s.page, s.path, s.ep, s.anilistId, s.show, s.epTitle, s.epCount, s.hasPrev, s.hasNext, s.theater, !!p, p ? p.error : '', p ? p.state : '',
-    s.menu ? JSON.stringify(s.menu) : '', s.dl, s.offline, s.download, s.sub, s.rate].join('|');
+  const p = s.player || {};
+  return JSON.stringify([s.page, epId(s), s.show, s.ep, s.epTitle, s.hasPrev, s.hasNext, s.cover, s.coverUrl, s.sourceName, s.quality, p.state, p.error, p.allFailed, p.note,
+    s.servers, s.server, s.video, s.dl, s.dlId, s.stamp, s.subs, s.sub, s.audios, s.audio, s.rate]);
 };
 
 function stateChanged(prev) {
   const s = S.state;
-  if (s.page === 'login' && prev.page !== 'login') S.tab = 'now';
-  const newEpisode = s.page === 'watch' && (prev.path !== s.path || prev.ep !== s.ep);
-  if (newEpisode) S.range = Math.floor(Math.max(0, (s.ep || 1) - 1) / 100);
-  // expectNav is true after an episode chip, or the AniList id of a show opened from a list.
-  const show = s.page === 'watch' || s.page === 'info';
-  if (show && S.expectNav && (S.expectNav === true ? newEpisode : s.anilistId === S.expectNav)) {
-    S.tab = 'now';
-    S.expectNav = false;
-  } else if (newEpisode && prev.page !== 'watch') S.tab = 'now';
+  const newEpisode = playing() && epId(prev) !== epId(s);
+  if (newEpisode) {
+    const i = curIndex();
+    S.range = Math.floor(Math.max(0, i) / 100);
+    if (prev.page !== 'watch') S.tab = 'now';
+    if (S.sheet && !S.sheet.startsWith('pick:')) S.sheet = '';
+  }
+  if (!playing() && S.sheet && !S.sheet.startsWith('pick:')) S.sheet = '';
   if (s.anilistId && !entry(s.anilistId) && !S.media[s.anilistId]) {
     S.media[s.anilistId] = { id: s.anilistId, pending: true };
     D.media(s.anilistId);
@@ -163,14 +196,16 @@ function stateChanged(prev) {
 function render() {
   const view = $('#view');
   const keep = view.dataset.tab === S.tab ? view.scrollTop : 0;
+  const sheetTop = $('.sheet') ? $('.sheet').scrollTop : 0;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.tab === S.tab));
   $('#heading').textContent = TITLES[S.tab];
   if (S.tab !== 'now') setAccent();
   const f = { now: renderNow, next: renderNext, schedule: renderSchedule, lists: renderLists, browse: renderBrowse,
     downloads: renderDownloads, settings: renderSettings }[S.tab];
-  view.innerHTML = f();
+  view.innerHTML = f() + sheetHtml();
   view.dataset.tab = S.tab;
   view.scrollTop = keep;
+  if ($('.sheet')) $('.sheet').scrollTop = sheetTop;
   if (S.tab === 'now') {
     wireTrack();
     progress();
@@ -183,127 +218,83 @@ function render() {
 
 function renderNow() {
   const s = S.state;
-  if (s.page === 'login') {
-    setAccent();
-    return `<div class="idle"><div class="idle-title">Logging in to AniList</div>
-      <div class="idle-sub">Enter your AniList email and password on the top screen; the keyboard opens down here.
-        When you're done, the site takes you back and your lists show up in Up Next.</div>
-      <button class="btn" data-go="/">Back to the site</button></div>`;
-  }
-  if (s.page !== 'watch' && s.page !== 'info') {
+  if (!playing()) {
     setAccent();
     return renderIdle();
   }
   const m = info(s.anilistId);
   setAccent(m.color);
   const facts = [];
+  if (s.quality) facts.push(s.quality);
   if (m.format) facts.push(m.format.replace(/_/g, ' '));
   if (m.year) facts.push(m.year);
   if (m.mstatus) facts.push(STATUS_NAMES[m.mstatus] || m.mstatus);
-  // A download plays without a connection, so its cover comes from the Thor.
-  const cover = s.offline && s.anilistId ? `https://shelf.anideck/cover/${s.anilistId}` : m.cover;
-  let h = `<div class="hero" style="--img:url('${esc(s.offline ? cover : m.banner || m.cover || '')}')">
+  const cover = coverSrc(s.cover) || viaApp(s.source, s.coverUrl) || m.cover || '';
+  const n = numLabel(s.ep);
+  const name = bareTitle(s.epTitle);
+  const epLine = `Episode ${n}${name ? ' · ' + esc(name) : ''}`;
+  let h = `<div class="hero" style="--img:url('${esc(s.offline ? cover : m.banner || cover)}')">
     ${cover ? `<img class="cover" src="${esc(cover)}" data-alt="${esc(m.cover || '')}">` : ''}
     <div class="meta">
-      <div class="kicker">${s.offline ? 'Playing a download' : s.page === 'watch' ? 'Now playing' : 'On the top screen'}</div>
+      <div class="kicker">${s.offline ? 'Playing a download' : `Now playing${s.sourceName ? ' · ' + esc(s.sourceName) : ''}`}</div>
       <div class="htitle">${esc(s.show || m.title || '')}</div>
-      ${s.page === 'watch' ? `<div class="hsub">Episode ${s.ep}${s.epTitle ? ' · ' + esc(s.epTitle) : ''}</div>` : ''}
+      <div class="hsub">${epLine}</div>
       <div class="facts">${facts.map((f) => `<span class="chip">${esc(f)}</span>`).join('')}${listChip(m)}${m.nextAt ? `<span class="chip">Ep ${m.nextEp} in ${until(m.nextAt)}</span>` : ''}</div>
     </div>
   </div>`;
-  if (s.page === 'info') {
-    const next = Math.max(1, Math.min((m.progress || 0) + 1, m.aired || 1));
-    return h + `<div class="cta"><button class="btn primary xl" data-act="watchEp" data-ep="${next}">${I.play}Play episode ${next}</button>
-      ${s.anilistId ? `<button class="btn xl" data-act="save">${isSaved(s.anilistId) ? '★ Saved' : '☆ Save show'}</button>` : ''}</div>`;
-  }
-  const p = s.player;
-  if (s.offline && p && p.state === 'error') {
-    h += `<div class="error"><div class="et"><b>This download won't play</b>${esc(p.error)}. Delete it in Downloads and
-      download the episode again.</div><button class="btn" data-act="closeDl">Back to the site</button></div>`;
-  } else if (p && p.state === 'error' && p.allFailed) {
-    h += `<div class="error"><div class="et"><b>None of the servers could play this episode</b>Some of the site's video
-      servers can't be reached from this network. Try again later, or pick a server to retry it.</div>
-      <button class="btn" data-cmd="menu" data-label="Server">Servers</button></div>`;
-  } else if (p && p.state === 'error') {
-    h += `<div class="error"><div class="et"><b>This video won't load</b>${esc(p.error)}. Some of the site's video servers
-      can't be reached from this network, so try another server.</div><button class="btn" data-cmd="menu" data-label="Server">Servers</button></div>`;
-  } else if (p && p.state === 'stalled') {
-    h += `<div class="error"><div class="et"><b>Waiting for the video</b>If it doesn't start in a few seconds, this server
-      may be down or blocked on this network. Try another one.</div><button class="btn" data-cmd="menu" data-label="Server">Servers</button></div>`;
-  }
+  h += playerNote(s);
+  const p = s.player || {};
   h += `<div class="seek"><span id="tCur">0:00</span><div class="track" id="track"><div class="fill" id="fill"></div><div class="knob" id="knob"></div></div><span id="tDur">0:00</span></div>
   <div class="controls">
     <button class="ctl" data-cmd="prev" ${s.hasPrev ? '' : 'disabled'}>${I.prev}</button>
     <button class="ctl" data-cmd="seekBy" data-d="-10">${I.back10}</button>
-    <button class="ctl play" data-cmd="toggle" id="playBtn">${p && p.state === 'playing' ? I.pause : I.play}</button>
+    <button class="ctl play" data-cmd="toggle" id="playBtn">${p.state === 'playing' ? I.pause : I.play}</button>
     <button class="ctl" data-cmd="seekBy" data-d="10">${I.fwd10}</button>
     <button class="ctl" data-cmd="next" ${s.hasNext ? '' : 'disabled'}>${I.next}</button>
   </div>
-  <div class="pills">${s.offline ? offlinePills(s) : sitePills(s)}</div>`;
-  return h + (s.offline ? dlStrip(s) : episodeStrip(s, m)) + (s.offline ? (S.subSheet ? subSheet(s) : '') : s.menu ? menuSheet(s.menu) : '');
+  <div class="pills">${pills(s)}</div>`;
+  return h + episodeStrip(s);
 }
 
-const savePill = (s) => (s.anilistId ? `<button class="pill ${isSaved(s.anilistId) ? 'on' : ''}" data-act="save">${isSaved(s.anilistId) ? '★ Saved' : '☆ Save show'}</button>` : '');
-
-function sitePills(s) {
-  return `<button class="pill" data-cmd="skip">Skip intro / outro</button>
-    <button class="pill ${s.theater ? 'on' : ''}" data-cmd="theater">Fill screen</button>
-    <button class="pill" data-cmd="captions">Subtitles</button>
-    <button class="pill" data-act="speed">Speed ${S.rate}×</button>
-    <button class="pill" data-cmd="menu" data-label="Server">Server</button>
-    <button class="pill" data-cmd="menu" data-label="Language">Sub / Dub</button>
-    ${dlPill(s)}${savePill(s)}`;
+// Trouble with the video, or what it's waiting for.
+function playerNote(s) {
+  const p = s.player || {};
+  if (p.state === 'error' && s.offline) {
+    return `<div class="error"><div class="et"><b>This download won't play</b>${esc(p.error)}. Delete it in Downloads and
+      download the episode again.</div><button class="btn" data-act="close">Close</button></div>`;
+  }
+  if (p.state === 'error') {
+    const what = p.allFailed ? '<b>None of the servers could play this episode</b>The source may be down, or its servers blocked on this network.'
+      : `<b>This video won't load</b>${esc(p.error)}.`;
+    return `<div class="error"><div class="et">${what} Try again, or pick another server.</div>
+      <button class="btn" data-cmd="retry">Try again</button><button class="btn" data-sheet="server">Servers</button></div>`;
+  }
+  if (p.state === 'loading' && p.note) return `<div class="note" style="text-align:center;padding:18px 0 0">${esc(p.note)}</div>`;
+  return '';
 }
 
-// A download doesn't know where the opening is, and its subtitles are tracks in the file.
-function offlinePills(s) {
-  const name = s.sub >= 0 && s.subs ? s.subs[s.sub] : 'Off';
-  return `<button class="pill" data-cmd="skip">Skip 85 s</button>
-    <button class="pill ${s.sub >= 0 ? 'on' : ''}" data-act="subs">Subtitles · ${esc(name.length > 26 ? name.slice(0, 25) + '…' : name)}</button>
-    <button class="pill" data-act="speed">Speed ${s.rate || 1}×</button>
-    <button class="pill" data-act="closeDl">Back to the site</button>
-    ${savePill(s)}`;
+function pills(s) {
+  const subName = s.sub >= 0 && s.subs && s.subs[s.sub] ? s.subs[s.sub] : 'Off';
+  const audioName = s.audio >= 0 && s.audios && s.audios[s.audio] ? s.audios[s.audio] : '';
+  const short = (t) => (t.length > 22 ? t.slice(0, 21) + '…' : t);
+  const srv = !s.offline && s.servers && s.servers[s.server] ? s.servers[s.server].name : '';
+  let h = `<button class="pill${s.stamp ? ' on' : ''}" data-cmd="skip">${s.stamp ? 'Skip ' + esc(s.stamp.toLowerCase()) : 'Skip 85 s'}</button>`;
+  if (!s.offline) h += `<button class="pill" data-sheet="server">${srv ? esc(short(srv)) : 'Servers'}</button>`;
+  if (s.subs && s.subs.length) h += `<button class="pill${s.sub >= 0 ? ' on' : ''}" data-sheet="sub">Subtitles · ${esc(short(subName))}</button>`;
+  if (s.audios && s.audios.length > 1) h += `<button class="pill" data-sheet="audio">Audio · ${esc(short(audioName || 'Default'))}</button>`;
+  h += `<button class="pill" data-cmd="speed">Speed ${rateLabel(s.rate)}×</button>`;
+  if (!s.offline) h += dlPill(s);
+  if (s.key) h += `<button class="pill ${isSaved(s.key) ? 'on' : ''}" data-act="save">${isSaved(s.key) ? '★ Saved' : '☆ Save show'}</button>`;
+  return h + '<button class="pill" data-act="close">Close player</button>';
 }
 
-// The episode's download once there is one; servers without downloads leave the button dimmed.
+// The episode's download, once there is one.
 function dlPill(s) {
   const r = dlFor(s);
   if (r && r.state === 'done') return `<button class="pill on" id="dlPill" data-act="playDl" data-dl="${esc(r.id)}">Play download</button>`;
-  if (!s.dl) return '';
   if (r && r.state === 'failed') return `<button class="pill" id="dlPill" data-tab="downloads">Download failed</button>`;
   if (r) return `<button class="pill" id="dlPill" data-tab="downloads">${esc(dlShort(r))}</button>`;
-  return `<button class="pill ${s.dl === 'off' ? 'dim' : ''}" id="dlPill" data-act="download">Download</button>`;
-}
-
-function subSheet(s) {
-  const opts = (s.subs || []).map((n, i) => `<button class="choice${s.sub === i ? ' on' : ''}" data-act="sub" data-i="${i}"><b>${esc(n)}</b></button>`).join('');
-  return `<div class="sheet"><div class="sheet-head"><div class="sheet-title">Subtitles</div>
-      <button class="btn" data-act="closeSheet">Close</button></div>
-    <div class="choices"><button class="choice${s.sub < 0 ? ' on' : ''}" data-act="sub" data-i="-1"><b>Off</b></button>${opts}</div>
-    <div class="note">Y on the controller turns subtitles on and off.</div></div>`;
-}
-
-// The show's other downloaded episodes, in place of the site's episode list.
-function dlStrip(s) {
-  const mine = (S.dls.items || []).filter((r) => r.state === 'done' && sameShow(r, s)).sort((x, y) => x.ep - y.ep);
-  if (mine.length < 2) return '';
-  return `<div class="eps-head"><div class="slbl">Downloaded episodes</div></div><div class="strip" id="strip">${mine.map((r) =>
-    `<button class="ep${r.ep === s.ep ? ' cur' : ''}${dlWatched(r) ? ' seen' : ''}" data-act="playDl" data-dl="${esc(r.id)}">${r.ep}</button>`).join('')}</div>`;
-}
-
-// The choices of the site's open Server or Language menu, picked here instead of on the top screen.
-function menuSheet(menu) {
-  const opts = menu.options.map((o, i) => {
-    const [name, ...tags] = o.parts;
-    const chips = tags.map((t) => (t.toLowerCase() in SERVER_TAGS ? SERVER_TAGS[t.toLowerCase()] : t)).filter(Boolean);
-    return `<button class="choice${o.active ? ' on' : ''}" data-pick="${i}" ${o.disabled ? 'disabled' : ''}>
-      <b>${esc(name || 'Option ' + (i + 1))}</b>${chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('')}</button>`;
-  }).join('');
-  return `<div class="sheet"><div class="sheet-head">
-      <div class="sheet-title">${menu.label === 'Server' ? 'Choose a server' : 'Subtitles or dub'}</div>
-      <button class="btn" data-cmd="menu" data-label="${esc(menu.label)}">Close</button>
-    </div><div class="choices">${opts}</div>
-    ${menu.label === 'Server' ? '<div class="note">If an episode won\'t load, another server usually works.</div>' : ''}</div>`;
+  return `<button class="pill" id="dlPill" data-act="download">Download</button>`;
 }
 
 function listChip(m) {
@@ -311,24 +302,78 @@ function listChip(m) {
   return `<span class="chip acc">${LIST_NAMES[m.status] || m.status} · ${m.progress || 0}/${m.episodes || '?'}</span>`;
 }
 
-function episodeStrip(s, m) {
-  const total = Math.max(s.epCount || 0, m.aired || 0, s.ep || 0);
-  if (!total) return '';
-  const per = 100, pages = Math.ceil(total / per);
+// Where the episode on screen is in S.eps.
+function curIndex() {
+  const s = S.state;
+  return s.offline ? S.eps.findIndex((e) => e.dl === s.download) : s.epIndex;
+}
+
+function episodeStrip(s) {
+  const eps = S.eps || [];
+  if (eps.length < 2) return '';
+  const cur = curIndex();
+  const per = 100, pages = Math.ceil(eps.length / per);
   S.range = Math.min(S.range, pages - 1);
-  const from = S.range * per + 1, to = Math.min(total, from + per - 1);
-  const seen = m.progress || 0, aired = m.aired || total;
+  const from = S.range * per, to = Math.min(eps.length, from + per);
   let chips = '';
-  for (let n = from; n <= to; n++) {
-    const cls = (n === s.ep ? ' cur' : '') + (n <= seen ? ' seen' : '') + (n > aired ? ' soon' : '');
-    chips += `<button class="ep${cls}" data-cmd="episode" data-ep="${n}">${n}</button>`;
+  for (let i = from; i < to; i++) {
+    const e = eps[i];
+    const target = e.dl ? `data-epdl="${esc(e.dl)}"` : `data-epi="${i}"`;
+    chips += `<button class="ep${i === cur ? ' cur' : ''}${e.w ? ' seen' : ''}" ${target}>${esc(e.n)}</button>`;
   }
   let ranges = '';
   if (pages > 1) {
-    for (let r = 0; r < pages; r++) ranges += `<button class="${r === S.range ? 'on' : ''}" data-range="${r}">${r * per + 1}–${Math.min(total, (r + 1) * per)}</button>`;
+    for (let r = 0; r < pages; r++) {
+      const a = eps[r * per], b = eps[Math.min(eps.length, (r + 1) * per) - 1];
+      ranges += `<button class="${r === S.range ? 'on' : ''}" data-range="${r}">${esc(a.n)}–${esc(b.n)}</button>`;
+    }
   }
-  return `<div class="eps-head"><div class="slbl">Episodes</div><div class="ranges">${ranges}</div></div><div class="strip" id="strip">${chips}</div>`;
+  return `<div class="eps-head"><div class="slbl">${s.offline ? 'Downloaded episodes' : 'Episodes'}</div><div class="ranges">${ranges}</div></div><div class="strip" id="strip">${chips}</div>`;
 }
+
+// ---- sheets ----
+
+const sheetBox = (title, body, note) => `<div class="sheet"><div class="sheet-head"><div class="sheet-title">${esc(title)}</div>
+    <button class="btn" data-act="closeSheet">Close</button></div>${body}${note ? `<div class="note">${esc(note)}</div>` : ''}</div>`;
+
+function sheetHtml() {
+  const s = S.state;
+  if (S.sheet.startsWith('pick:')) return pickSheet(S.sheet.slice(5));
+  if (!playing() || S.tab !== 'now') return '';
+  if (S.sheet === 'server' && !s.offline) return serverSheet(s);
+  if (S.sheet === 'sub' || S.sheet === 'audio') return trackSheet(S.sheet, s);
+  return '';
+}
+
+// Each server with its qualities; servers that load their videos when picked show one choice.
+function serverSheet(s) {
+  const body = (s.servers || []).map((h, hi) => {
+    const vids = h.videos || [];
+    const choices = vids.length
+      ? vids.map((t, vi) => `<button class="choice${hi === s.server && vi === s.video ? ' on' : ''}" data-srv="${hi}" data-v="${vi}"><b>${esc(t || 'Video ' + (vi + 1))}</b></button>`).join('')
+      : `<button class="choice${hi === s.server ? ' on' : ''}" data-srv="${hi}" data-v="-1"><b>${h.lazy ? 'Load this server' : 'Try this server'}</b></button>`;
+    return `<div class="slbl">${esc(h.name)}${h.error ? ` · <span class="err">${esc(h.error)}</span>` : ''}</div><div class="choices">${choices}</div>`;
+  }).join('');
+  return sheetBox('Servers and quality', body || '<div class="empty">No servers yet</div>',
+    "If an episode won't load, another server usually works. Y on the controller opens these on the top screen too.");
+}
+
+function trackSheet(kind, s) {
+  const names = (kind === 'sub' ? s.subs : s.audios) || [];
+  const cur = kind === 'sub' ? s.sub : s.audio;
+  let opts = names.map((n, i) => `<button class="choice${cur === i ? ' on' : ''}" data-trk="${kind}" data-i="${i}"><b>${esc(n)}</b></button>`).join('');
+  if (kind === 'sub') opts = `<button class="choice${cur < 0 ? ' on' : ''}" data-trk="sub" data-i="-1"><b>Off</b></button>` + opts;
+  return sheetBox(kind === 'sub' ? 'Subtitles' : 'Audio', `<div class="choices">${opts}</div>`,
+    kind === 'sub' ? 'New episodes start with the language picked in Settings when the source has it.' : '');
+}
+
+function pickSheet(key) {
+  const cur = String(S.settings[key] == null ? '' : S.settings[key]);
+  const opts = (PICKS[key] || []).map(([v, label]) => `<button class="choice${v === cur ? ' on' : ''}" data-choose="${key}" data-v="${v}"><b>${esc(label)}</b></button>`).join('');
+  return sheetBox(PICK_TITLES[key] || key, `<div class="choices">${opts}</div>`, '');
+}
+
+// ---- seek bar ----
 
 function progress() {
   const p = S.state.player;
@@ -375,46 +420,46 @@ function wireTrack() {
   });
 }
 
+// ---- nothing playing ----
+
 function renderIdle() {
   const g = groups();
   const picks = g.fresh.concat(g.cont, g.waiting).slice(0, 4);
   const recent = S.shelf.recent.slice(0, 4), saved = S.shelf.saved.slice(0, 5);
   let h = `<div class="idle"><div class="idle-title">Nothing playing</div>
-    <div class="idle-sub">Pick something to watch, or browse the site on the top screen.</div>${searchForm()}</div>`;
-  if (recent.length) h += `<div class="slbl">Recently played</div><div class="cards">${recent.map(recentCard).join('')}</div>`;
+    <div class="idle-sub">Pick something to watch, or browse on the top screen.</div>${searchForm()}</div>`;
+  if (recent.length) h += `<div class="slbl">Continue watching</div><div class="cards">${recent.map(recentCard).join('')}</div>`;
   if (saved.length) h += `<div class="slbl" style="margin-top:30px">Saved shows</div><div class="grid">${saved.map(savedTile).join('')}</div>`;
   if (picks.length) h += `<div class="slbl" style="margin-top:30px">From your Watching list</div><div class="cards">${picks.map(card).join('')}</div>`;
-  else if (!S.lib.account && !recent.length) h += signInCard();
+  if (!recent.length && !saved.length) {
+    h += `<div class="group" style="margin-top:30px"><div class="gt">Getting started</div>
+      <div class="note">Shows come from extensions. Add one or two on the top screen (Extensions), then browse or search them
+        there or here. Episodes stream in AniDeck's own player, and downloads play without a connection.</div>
+      <div class="acct-actions"><button class="btn primary" data-go="#/extensions">Extensions</button><button class="btn" data-go="#/browse">Browse</button></div></div>`;
+  }
+  if (!S.lib.account && !recent.length) h += signInCard();
   return h;
 }
 
-// An episode from the history on the Thor: resumes it, or opens the next one once it was watched to the end.
-function recentCard(e) {
-  const done = e.d > 0 && e.t > e.d * 0.92;
-  const next = done && (!e.epCount || e.ep < e.epCount);
-  const ep = next ? e.ep + 1 : e.ep;
-  const left = e.d > 0 ? Math.max(1, Math.round((e.d - e.t) / 60)) : 0;
-  const line = next ? `Episode ${ep} is next` : done ? `Finished episode ${e.ep}` : `Episode ${e.ep}${left ? ` · ${left} min left` : ''}`;
-  const target = e.id > 0 ? `data-open="${e.id}" data-ep="${ep}"` : `data-go="${esc(e.path)}?ep=${ep}"`;
-  const p = next || !e.d ? 0 : Math.round(Math.min(1, e.t / e.d) * 100);
-  return `<button class="card" ${target}>
-    <img src="${esc(shelfCover(e))}" data-alt="${esc(e.cover || '')}" loading="lazy">
-    <div class="ct"><div class="t">${esc(e.show)}</div><div class="m">${line}</div>
-      <div class="prog"><i style="width:${p}%"></i></div><div class="m">${ago(e.at)}</div></div>
+// A show from the history on the Thor: resumes the episode, or plays the next one after it was watched.
+function recentCard(b) {
+  const n = nextOf(b);
+  let line = b.sourceName || '';
+  if (n && n.done) line = n.num >= 0 ? `Episode ${numLabel(n.num + 1)} is next` : 'Next episode';
+  else if (n) line = `${n.num >= 0 ? `Episode ${numLabel(n.num)}` : esc(n.name || '')}${n.d > 0 ? ` · ${Math.max(1, Math.round((n.d - n.t) / 60))} min left` : ''}`;
+  const p = n && !n.done && n.d > 0 ? Math.round(Math.min(1, n.t / n.d) * 100) : 0;
+  return `<button class="card" data-show="${esc(b.key)}" data-resume="1">
+    <img src="${esc(shelfImg(b))}" loading="lazy">
+    <div class="ct"><div class="t">${esc(b.title)}</div><div class="m">${line}</div>
+      <div class="prog"><i style="width:${p}%"></i></div><div class="m">${esc([b.sourceName, b.at ? ago(b.at) : ''].filter(Boolean).join(' · '))}</div></div>
   </button>`;
 }
 
-function savedLine(e) {
-  if (e.nextAt > Date.now() / 1000) return `Ep ${e.nextEp} in ${until(e.nextAt)}`;
-  const format = e.format && e.format !== 'TV' ? e.format.replace(/_/g, ' ') : '';
-  return [format, e.episodes ? `${e.episodes} episodes` : '', e.year || ''].filter(Boolean).join(' · ');
-}
-
-function savedTile(e) {
-  const r = S.shelf.recent.find((x) => x.id === e.id);
-  return `<button class="tile" data-open="${e.id}" data-ep="${r ? r.ep : 0}">
-    <img src="${esc(shelfCover(e))}" data-alt="${esc(e.cover || '')}" loading="lazy"><div class="t">${esc(e.title)}</div>
-    <div class="m">${esc(savedLine(e))}</div></button>`;
+function savedTile(b) {
+  const n = nextOf(b);
+  const line = n ? (n.done ? `Ep ${numLabel(n.num + 1)} next` : `Ep ${numLabel(n.num)}`) : b.sourceName || 'AniList';
+  return `<button class="tile" data-show="${esc(b.key)}">
+    <img src="${esc(shelfImg(b))}" loading="lazy"><div class="t">${esc(b.title)}</div><div class="m">${esc(line)}</div></button>`;
 }
 
 // Watching list, split into new episodes (airing shows), unwatched episodes of finished shows,
@@ -504,7 +549,7 @@ function renderSchedule() {
 function renderLists() {
   const saved = S.shelf.saved;
   const savedGrid = () => (saved.length ? `<div class="grid">${saved.map(savedTile).join('')}</div>`
-    : `<div class="empty"><b>No saved shows</b>Press "Save show" on Now Playing to keep a show here, with its cover and details, even offline.</div>`);
+    : `<div class="empty"><b>No saved shows</b>Press Save on a show, here or on the top screen, to keep it here with its cover, even offline.</div>`);
   if (!S.lib.account) return (saved.length ? `<div class="slbl">Saved shows</div>${savedGrid()}<div style="height:30px"></div>` : '') + signInCard();
   const savedSeg = saved.length || S.listTab === 'SAVED'
     ? `<button class="${S.listTab === 'SAVED' ? 'on' : ''}" data-list="SAVED">Saved ${saved.length}</button>` : '';
@@ -529,28 +574,29 @@ function listTiles(savedSeg) {
 }
 
 const searchForm = () =>
-  `<form class="search" id="search"><input id="q" type="search" placeholder="Search anime" enterkeyhint="search" autocomplete="off"><button class="btn primary">Search</button></form>`;
-const link = (path, label) => `<button data-go="${path}">${label}</button>`;
+  `<form class="search" id="search"><input id="q" type="search" placeholder="Search your sources" enterkeyhint="search" autocomplete="off"><button class="btn primary">Search</button></form>`;
+const link = (route, label) => `<button data-go="${route}">${label}</button>`;
 
 function renderBrowse() {
   return searchForm() + `<div class="links">
-    ${link('/', 'Home')}${link('/trending', 'Trending')}${link('/schedule', 'Airing schedule')}
-    ${link('/history', 'History')}${link('/profile', 'Profile')}<button data-cmd="click" data-label="Random Anime">Random</button>
+    ${link('#/home', 'Home')}${link('#/browse', 'Sources')}${link('#/search', 'Search')}
+    ${link('#/library', 'Library')}${link('#/downloads', 'Downloads')}${link('#/extensions', 'Extensions')}
   </div>
-  <div class="note" style="margin-top:26px">Pages open on the top screen. You can also tap and scroll the site up there.</div>`;
+  <div class="note" style="margin-top:26px">Pages open on the top screen. Searches look through every installed source at once.</div>`;
 }
 
 // ---- downloads ----
 
-const sameShow = (r, s) => (s.anilistId > 0 ? r.a === s.anilistId : r.show === s.show);
-const dlFor = (s) => (s.page === 'watch' ? (S.dls.items || []).find((r) => r.ep === s.ep && sameShow(r, s)) : null);
-const dlActive = (r) => r.state === 'preparing' || r.state === 'downloading';
-const dlWatched = (r) => r.d > 0 && r.t >= r.d * 0.92;
+const dlFor = (s) => (s.dlId ? (S.dls.items || []).find((r) => r.id === s.dlId) : null);
+const dlActive = (r) => r.state === 'queued' || r.state === 'preparing' || r.state === 'downloading';
+const dlWatched = (r) => r.d > 0 && r.t >= r.d * DONE;
 const dlPct = (r) => (r.size > 0 ? Math.min(100, Math.round(((r.got || 0) / r.size) * 100)) : 0);
 const mb = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : Math.round((n || 0) / 1e6) + ' MB');
-const dlShort = (r) => (r.state === 'preparing' ? 'Preparing download…' : r.size ? `Downloading ${dlPct(r)}%` : 'Downloading…');
+const dlShort = (r) => (r.state === 'queued' ? 'Waiting to download' : r.state === 'preparing' ? 'Preparing download…' : r.size ? `Downloading ${dlPct(r)}%` : 'Downloading…');
+const dlImg = (r) => coverSrc(r.cover) || viaApp(r.source, r.anime && r.anime.thumbnail_url);
 
 function dlStatus(r) {
+  if (r.state === 'queued') return 'Waiting for the downloads ahead of it';
   if (r.state === 'preparing') return r.note || 'Getting the episode ready';
   if (!r.size) return r.note || 'Starting';
   let line = `${mb(r.got)} of ${mb(r.size)} · ${dlPct(r)}%`;
@@ -563,10 +609,9 @@ function dlStatus(r) {
 function renderDownloads() {
   const items = S.dls.items || [];
   const foot = `<div class="note" style="margin-top:26px">Saved in ${esc(S.dls.folder || 'Movies/AniDeck')} on this Thor ·
-    ${mb(S.dls.used)} used, ${mb(S.dls.free)} free. Episodes download in the language you watch in (Sub or Dub),
-    in the quality picked in Settings.</div>`;
+    ${mb(S.dls.used)} used, ${mb(S.dls.free)} free. Episodes download in the quality picked in Settings, or the closest the source has.</div>`;
   if (!items.length) {
-    return `<div class="empty"><b>No downloads yet</b>Press Download on Now Playing, or under the video on the top screen.
+    return `<div class="empty"><b>No downloads yet</b>Press Download on Now Playing, or on a show's page on the top screen.
       Downloaded episodes play without a connection, here and from CrossBar.</div>` + foot;
   }
   let h = '';
@@ -578,7 +623,7 @@ function renderDownloads() {
   }
   const shows = [];
   for (const r of items.filter((x) => x.state === 'done')) {
-    const k = r.a > 0 ? 'a' + r.a : 's' + r.show;
+    const k = r.key || r.show;
     let g = shows.find((x) => x.k === k);
     if (!g) shows.push((g = { k, show: r.show, items: [] }));
     g.items.push(r);
@@ -595,15 +640,18 @@ function renderDownloads() {
 // grouped: under its show's heading, so the row leads with the episode.
 function dlRow(r, grouped) {
   const id = esc(r.id);
-  const img = r.a > 0 ? `<img src="https://shelf.anideck/cover/${r.a}" loading="lazy">` : '<div class="noimg"></div>';
-  const ep = `Episode ${r.ep}${r.epTitle ? ' · ' + esc(r.epTitle) : ''}`;
+  const src = dlImg(r);
+  const img = src ? `<img src="${esc(src)}" loading="lazy">` : '<div class="noimg"></div>';
+  const n = numLabel(r.ep);
+  const name = bareTitle(r.epTitle);
+  const ep = `Episode ${n}${name ? ' · ' + esc(name) : ''}`;
   let lines, acts;
   if (r.state === 'done') {
     const left = dlWatched(r) ? 'watched' : r.d > 0 && r.t > 5 ? `${Math.max(1, Math.round((r.d - r.t) / 60))} min left` : '';
-    const playing = S.state.offline && S.state.download === r.id;
-    lines = `<div class="m">${esc([r.quality, r.version, mb(r.size), left].filter(Boolean).join(' · '))}</div>
+    const on = S.state.offline && S.state.download === r.id;
+    lines = `<div class="m">${esc([r.quality, mb(r.size), left].filter(Boolean).join(' · '))}</div>
       ${r.d > 0 && r.t > 5 ? `<div class="prog"><i style="width:${Math.min(100, Math.round((r.t / r.d) * 100))}%"></i></div>` : ''}`;
-    acts = `<button class="btn primary" data-act="playDl" data-dl="${id}">${playing ? 'Playing' : 'Play'}</button>
+    acts = `<button class="btn primary" data-act="playDl" data-dl="${id}">${on ? 'Playing' : 'Play'}</button>
       <button class="btn ${S.confirmDl === r.id ? 'danger' : ''}" id="del-${id}" data-act="deleteDl" data-dl="${id}">${S.confirmDl === r.id ? 'Delete?' : 'Delete'}</button>`;
   } else if (r.state === 'failed') {
     lines = `<div class="m err">${esc(r.error || 'The download failed')}</div>`;
@@ -618,10 +666,10 @@ function dlRow(r, grouped) {
     <div class="dl-acts">${acts}</div></div>`;
 }
 
-// From onDownloads, and from polling while episodes download.
+// From onDownloads, about twice a second while episodes download.
 function dlUpdate(j) {
   if (!j || !j.items) return;
-  const shapeOf = (d) => (d.items || []).map((r) => [r.id, r.state, r.t, r.subs ? r.subs.length : 0, r.error].join(':')).join(',');
+  const shapeOf = (d) => (d.items || []).map((r) => [r.id, r.state, r.t, r.cover, r.error].join(':')).join(',');
   const before = shapeOf(S.dls), now = Date.now(), dt = (now - S.dlAt) / 1000;
   for (const r of j.items) {
     const old = (S.dls.items || []).find((x) => x.id === r.id);
@@ -657,9 +705,11 @@ function dlBadge() {
   b.classList.toggle('show', n > 0);
 }
 
+// ---- settings ----
+
 function signInBody() {
-  return `<div class="note">Log in to the site with your AniList account on the top screen. Your Watching and Completed
-      lists then show up here, and finished episodes update your progress.</div>
+  return `<div class="note">Log in with your AniList account on the top screen. Your lists then show up here, and episodes
+      you finish count on AniList.</div>
     <div class="acct-actions"><button class="btn primary" data-act="login">Log in on the top screen</button></div>
     <div class="note">Or show a public AniList profile (read-only):</div>
     <form class="search" id="userForm" style="padding-bottom:22px"><input id="uname" placeholder="AniList username" autocomplete="off"><button class="btn">Show</button></form>`;
@@ -672,54 +722,67 @@ function signInCard() {
 const toggle = (k, label, sub) =>
   `<button class="opt" data-set="${k}"><span>${esc(label)}<small>${esc(sub)}</small></span><i class="sw ${S.settings[k] ? 'on' : ''}"></i></button>`;
 
+function choice(k, label) {
+  const v = String(S.settings[k] == null ? '' : S.settings[k]);
+  const o = (PICKS[k] || []).find((x) => x[0] === v);
+  return `<button class="opt" data-pick="${k}"><span>${esc(label)}</span><b style="font-size:23px;font-weight:600;color:var(--fg2)">${esc(o ? o[1] : v)}</b></button>`;
+}
+
 function renderSettings() {
   const a = S.lib.account;
   let acct;
   if (a) {
-    const how = a.via === 'site'
-      ? 'Signed in through your site login. Lists and progress sync with AniList.'
-      : 'Showing this public AniList profile. Log in to the site to update progress automatically.';
+    const how = a.via === 'site' || a.via === 'login'
+      ? 'Logged in. Lists and progress sync with AniList.'
+      : 'Showing this public AniList profile. Log in to have episodes count automatically.';
     acct = `<div class="acct">${a.avatar ? `<img src="${esc(a.avatar)}">` : ''}<div class="ct">${esc(a.name)}<small>${how}</small></div></div>
-      <div class="acct-actions">${a.via === 'site' ? '' : '<button class="btn" data-act="login">Log in on the top screen</button>'}
+      <div class="acct-actions">${a.via === 'user' ? '<button class="btn" data-act="login">Log in on the top screen</button>' : ''}
         <button class="btn" data-act="sync">Refresh lists</button><button class="btn" data-act="signout">Disconnect</button></div>`;
   } else {
     acct = signInBody();
   }
   if (S.lib.error) acct += `<div class="err">${esc(S.lib.error)}</div>`;
-  return `<div class="group"><div class="gt">AniList</div>${acct}</div>
+  const done = (S.dls.items || []).filter((r) => r.state === 'done').length;
+  return `<div class="group"><div class="gt">AniList</div>${acct}
+      ${toggle('autoTrack', 'Count episodes on AniList', S.lib.canTrack ? 'Moves your progress forward at 85% of an episode, for shows linked to AniList.' : 'Needs an AniList login (a public username is read-only).')}
+    </div>
     <div class="group"><div class="gt">Playback</div>
-      ${toggle('autoTheater', 'Fill the top screen when an episode plays', 'Get the page back with B or Y, or tap the top screen and choose Exit fill screen.')}
-      ${toggle('autoServer', 'Switch servers when a video won\'t load', 'Tries the site\'s other servers for the episode, one at a time.')}
-      ${toggle('autoTrack', 'Update AniList when I finish an episode', S.lib.canTrack ? 'Moves your progress forward at 85% of an episode.' : 'Needs the site login (a public username is read-only).')}
+      ${toggle('autoNext', 'Play the next episode', 'When an episode ends.')}
+      ${toggle('autoSkip', 'Skip intros and recaps', 'On sources that mark them. Otherwise X skips 85 seconds.')}
+      ${toggle('autoServer', 'Switch servers when one fails', 'Tries the next server or quality by itself.')}
+      ${choice('subLang', 'Subtitle language')}
+      ${choice('audioLang', 'Audio language')}
     </div>
     <div class="group"><div class="gt">Notifications</div>
       ${toggle('notify', 'New episode alerts', 'For shows on your Watching list, checked every 30 minutes on Wi-Fi.')}
     </div>
     <div class="group"><div class="gt">Downloads</div>
-      ${toggle('dlHD', 'Download in 1080p', 'Off: 480p, which takes much less space. Episodes download in the language you watch in, Sub or Dub.')}
-      <div class="note" style="margin:0">${(S.dls.items || []).filter((r) => r.state === 'done').length} downloaded (${mb(S.dls.used)}) in
-        ${esc(S.dls.folder || 'Movies/AniDeck')}, with ${mb(S.dls.free)} free on this Thor.</div>
+      ${choice('dlQuality', 'Download quality')}
+      <div class="note" style="margin:0">${done} downloaded (${mb(S.dls.used)}) in ${esc(S.dls.folder || 'Movies/AniDeck')}, with ${mb(S.dls.free)} free on this Thor.</div>
     </div>
     <div class="group"><div class="gt">On this Thor</div>
-      <div class="note" style="margin:0 0 16px">${S.shelf.recent.length} recently played, ${S.shelf.saved.length} saved shows. They show on
+      <div class="note" style="margin:0 0 16px">${S.shelf.recent.length} recently watched, ${S.shelf.saved.length} saved shows. They show on
         Now Playing and in CrossBar's bottom screen, with covers kept here so they work offline.</div>
-      <button class="btn" data-act="clearRecent" ${S.shelf.recent.length ? '' : 'disabled'}>Clear recently played</button>
+      <button class="btn" data-act="clearRecent" ${S.shelf.recent.length ? '' : 'disabled'}>Clear recently watched</button>
     </div>
     <div class="group"><div class="gt">Controller and touch</div><div class="keys">
-      <b>Touch</b><span>Tap either screen. The controller goes with the screen you touch, except while a video fills the top screen.</span>
+      <b>Touch</b><span>Tap either screen. The controller goes with the screen you touch, except while an episode plays on the top screen.</span>
       <b>Select</b><span>Switch the controller between the screens. Opening a show from this screen gives it to the top screen.</span>
-      <b>D-pad / left stick</b><span>Move the highlight</span>
-      <b>A</b><span>Choose the highlighted item; with nothing highlighted, play or pause</span>
-      <b>B</b><span>Back: closes a download, the keyboard and menus, leaves fill-screen, then goes back a page</span>
+      <b>D-pad / left stick</b><span>Move the highlight. While an episode plays: left/right seek 10 seconds, up/down change the volume.</span>
+      <b>A</b><span>Choose the highlighted item; while an episode plays, play or pause</span>
+      <b>B</b><span>Back: closes the keyboard and menus, then the player, then goes back a page</span>
       <b>Right stick</b><span>Scroll</span>
       <b>Start</b><span>Play or pause</span>
-      <b>X</b><span>Skip intro or outro (85 seconds in a download)</span>
-      <b>Y</b><span>Fill screen on or off; subtitles on or off in a download</span>
+      <b>X</b><span>Skip the opening or ending (85 seconds where the source doesn't mark them)</span>
+      <b>Y</b><span>The player's options: servers, quality, subtitles, audio and speed</span>
       <b>L1 / R1</b><span>Back or forward 10 seconds</span>
       <b>L2 / R2</b><span>Previous or next episode</span>
-      <b>Fill-screen</b><span>D-pad left/right seeks, up/down changes the volume</span>
     </div></div>
-    <div class="note">AniDeck ${esc(S.version)}. Episodes stream from ${esc((S.settings.site || '').replace(/^https:\/\//, ''))}; downloads are saved on this Thor.</div>`;
+    <div class="group"><div class="gt">Extensions</div>
+      <div class="note" style="margin:0 0 16px">Shows come from Aniyomi extensions (the Yūzōnō repo). Add, update and set them up on the top screen.</div>
+      <div class="acct-actions"><button class="btn" data-go="#/extensions">Extensions</button><button class="btn" data-go="#/settings">More settings</button></div>
+    </div>
+    <div class="note">AniDeck ${esc(S.version)}. Episodes stream and download straight from each source.</div>`;
 }
 
 // ---- chrome ----
@@ -755,7 +818,7 @@ function toast(msg) {
 // ---- controller: Pad.java sends the d-pad, A and B here while this screen has the controller ----
 
 const K = { active: false, on: false, el: null, key: '', home: '' };
-const DATA_KEYS = ['tab', 'cmd', 'label', 'd', 'ep', 'open', 'act', 'set', 'pick', 'list', 'range', 'go', 'dl', 'i'];
+const DATA_KEYS = ['tab', 'cmd', 'd', 'epi', 'epdl', 'open', 'ep', 'show', 'act', 'set', 'pick', 'choose', 'sheet', 'srv', 'trk', 'v', 'list', 'range', 'go', 'dl', 'i'];
 // Names a button across re-renders, which replace the elements.
 const keyOf = (el) => el.id || [el.tagName, ...DATA_KEYS.map((k) => el.dataset[k] || ''), el.textContent.trim().slice(0, 24)].join('|');
 
@@ -781,7 +844,7 @@ function navHide() {
   if (K.el) K.el.classList.remove('kfocus');
 }
 
-// Where the highlight starts: the picked server in a menu, the play button, or the page's first item.
+// Where the highlight starts: the current choice in a sheet, the play button, or the page's first item.
 function navStart(els) {
   return els.find((el) => el.matches('.choice.on')) || els.find((el) => el.id === 'playBtn')
     || els.find((el) => el.closest('#view')) || els[0];
@@ -794,7 +857,7 @@ function navMove(dir) {
   const find = (key) => key && els.find((el) => keyOf(el) === key);
   let cur = K.el && K.el.isConnected && els.includes(K.el) ? K.el : find(K.key);
   if (!cur) {
-    // A menu sheet opened (come back here when it closes) or closed (go back).
+    // A sheet opened (come back here when it closes) or closed (go back).
     if ($('.sheet')) K.home = K.key;
     else if ((cur = find(K.home))) K.home = '';
   }
@@ -816,7 +879,7 @@ function navRestore() {
 function navOk() {
   const el = K.on && K.el && K.el.isConnected ? K.el : null;
   if (!el) {
-    if (S.state.player) D.cmd(JSON.stringify({ c: 'toggle' }));
+    if (playing()) D.cmd(JSON.stringify({ c: 'toggle' }));
     else navMove(null);
   } else if (el.tagName === 'INPUT') {
     // A real tap, so the keyboard opens. Screen pixels, through the page's zoom.
@@ -827,15 +890,14 @@ function navOk() {
   }
 }
 
-// B: closes the keyboard or menu, then goes to Now Playing, then hands the controller to the top screen.
+// B: closes the keyboard or a sheet, then goes to Now Playing, then hands the controller to the top screen.
 function navBack() {
   const a = document.activeElement;
   if (a && a.tagName === 'INPUT') return a.blur();
-  if (S.subSheet) {
-    S.subSheet = false;
+  if (S.sheet) {
+    S.sheet = '';
     return render();
   }
-  if (S.state.menu) return D.cmd(JSON.stringify({ c: 'menu', label: S.state.menu.label }));
   if (S.tab !== 'now') {
     S.tab = 'now';
     return render();
@@ -845,35 +907,56 @@ function navBack() {
 
 // ---- input ----
 
+const cmd = (c) => D.cmd(JSON.stringify(c));
+
 document.addEventListener('click', (ev) => {
   const t = ev.target.closest('button');
   if (!t || t.disabled) return;
   const d = t.dataset;
   if (d.tab) {
     S.tab = d.tab;
+    S.sheet = '';
     render();
   } else if (d.cmd) {
     const c = { c: d.cmd };
     if (d.d) c.d = +d.d;
-    if (d.ep) {
-      c.ep = +d.ep;
-      S.expectNav = true;
-    }
-    if (d.label) c.label = d.label;
-    D.cmd(JSON.stringify(c));
-  } else if (d.pick) {
-    D.cmd(JSON.stringify({ c: 'pick', i: +d.pick }));
+    cmd(c);
+  } else if (d.epi !== undefined) {
+    cmd({ c: 'episode', i: +d.epi });
+  } else if (d.epdl) {
+    cmd({ c: 'episode', dl: d.epdl });
+  } else if (d.sheet) {
+    S.sheet = d.sheet;
+    render();
+  } else if (d.srv !== undefined) {
+    cmd({ c: 'server', h: +d.srv, v: +d.v });
+    S.sheet = '';
+    render();
+  } else if (d.trk) {
+    cmd({ c: d.trk, i: +d.i });
+    S.sheet = '';
+    render();
+  } else if (d.choose) {
+    S.settings[d.choose] = d.v;
+    D.choose(d.choose, d.v);
+    S.sheet = '';
+    render();
   } else if (d.open) {
     const id = +d.open;
-    const e = entry(id) || S.shelf.saved.find((x) => x.id === id) || S.shelf.recent.find((x) => x.id === id) || {};
-    S.expectNav = id;
-    D.open(id, +(d.ep || 0), e.romaji || e.title || e.show || '');
+    const e = entry(id) || {};
+    D.open(id, +(d.ep || 0), e.romaji || e.title || '');
+    toast('Opening on the top screen…');
+  } else if (d.show) {
+    D.openShow(d.show, d.resume === '1');
     toast('Opening on the top screen…');
   } else if (d.go) {
     D.go(d.go);
   } else if (d.set) {
     S.settings[d.set] = !S.settings[d.set];
     D.set(d.set, S.settings[d.set]);
+    render();
+  } else if (d.pick) {
+    S.sheet = 'pick:' + d.pick;
     render();
   } else if (d.list) {
     S.listTab = d.list;
@@ -888,20 +971,8 @@ document.addEventListener('click', (ev) => {
 
 function act(a, t) {
   switch (a) {
-    case 'speed': {
-      const cur = S.state.offline ? S.state.rate || 1 : S.rate;
-      S.rate = RATES[(RATES.indexOf(cur) + 1) % RATES.length];
-      D.cmd(JSON.stringify({ c: 'rate', r: S.rate }));
-      render();
-      break;
-    }
     case 'download':
-      if (S.state.dl === 'off') {
-        toast("This server doesn't offer downloads. Open Server and pick one marked Downloads");
-        break;
-      }
-      D.cmd(JSON.stringify({ c: 'download' }));
-      toast('Getting the episode ready to download…');
+      cmd({ c: 'download' });
       break;
     case 'playDl':
       D.playDownload(t.dataset.dl);
@@ -910,12 +981,12 @@ function act(a, t) {
         render();
       }
       break;
-    case 'closeDl':
-      D.closeDownload();
+    case 'close':
+      D.closePlayer();
       break;
     case 'retryDl':
       D.retryDownload(t.dataset.dl);
-      toast('Trying again on the top screen…');
+      toast('Trying the download again…');
       break;
     // Deleting a downloaded episode takes a second press; canceling one that's downloading doesn't.
     case 'deleteDl': {
@@ -932,25 +1003,12 @@ function act(a, t) {
       }
       S.confirmDl = '';
       D.deleteDownload(id);
-      toast(r && r.state === 'done' ? `Deleted episode ${r.ep}` : 'Download canceled');
+      toast(r && r.state === 'done' ? `Deleted episode ${numLabel(r.ep)}` : 'Download canceled');
       break;
     }
-    case 'subs':
-      S.subSheet = true;
-      render();
-      break;
-    case 'sub':
-      D.cmd(JSON.stringify({ c: 'sub', i: +t.dataset.i }));
-      S.subSheet = false;
-      render();
-      break;
     case 'closeSheet':
-      S.subSheet = false;
+      S.sheet = '';
       render();
-      break;
-    case 'watchEp':
-      S.expectNav = true;
-      D.go(S.state.path.replace(/^\/info\//, '/watch/') + '?ep=' + t.dataset.ep);
       break;
     case 'sync':
       D.sync();
@@ -964,23 +1022,25 @@ function act(a, t) {
       D.signOut();
       break;
     case 'save': {
-      const id = S.state.anilistId, on = !isSaved(id);
-      if (!id) break;
-      D.save(id, S.state.show || info(id).title || '', on);
+      const key = S.state.key, on = !isSaved(key);
+      if (!key) break;
+      D.save(key, on);
       toast(on ? 'Saved. It shows here and in CrossBar, even offline.' : 'Removed from your saved shows');
       break;
     }
     case 'clearRecent':
       D.clearRecent();
-      toast('Cleared recently played');
+      toast('Cleared recently watched');
       break;
   }
 }
 
-// A cover the Thor doesn't have yet falls back to the online one.
+// A cover the Thor doesn't have falls back to the online one, else its gray box stays.
 document.addEventListener('error', (ev) => {
   const i = ev.target;
-  if (i.tagName === 'IMG' && i.dataset.alt && i.getAttribute('src') !== i.dataset.alt) i.src = i.dataset.alt;
+  if (i.tagName !== 'IMG') return;
+  if (i.dataset.alt && i.getAttribute('src') !== i.dataset.alt) i.src = i.dataset.alt;
+  else i.removeAttribute('src');
 }, true);
 
 document.addEventListener('submit', (ev) => {
@@ -1007,9 +1067,10 @@ function boot() {
     S.settings = j.settings || {};
     S.version = j.version || '';
     S.shelf = j.shelf || S.shelf;
+    S.eps = j.episodes || [];
     S.dls = j.downloads || S.dls;
   } catch (e) {}
-  if (S.state.page !== 'watch' && S.state.page !== 'info' && S.lib.account) S.tab = 'next';
+  if (!playing() && S.lib.account && !S.shelf.recent.length) S.tab = 'next';
   if (S.state.anilistId && !entry(S.state.anilistId)) D.media(S.state.anilistId);
   badge();
   dlBadge();
@@ -1019,12 +1080,6 @@ function boot() {
   setInterval(() => {
     if (S.tab === 'next' || S.tab === 'schedule') render();
   }, 60000);
-  setInterval(() => {
-    if (!(S.dls.items || []).some(dlActive) || (S.tab !== 'downloads' && S.tab !== 'now')) return;
-    try {
-      dlUpdate(JSON.parse(D.downloads()));
-    } catch (e) {}
-  }, 1000);
 }
 
 boot();

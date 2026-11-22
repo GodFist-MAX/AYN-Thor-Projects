@@ -6,7 +6,7 @@
   dev/cdp.py nav <url> [--page S]     navigate a page
   dev/cdp.py shot <file> [--page S]   save a PNG screenshot of a page
 
---page picks the first page whose URL contains S (default: the first non-asset page, i.e. the site).
+--page picks the first page whose URL contains S (default: the first non-asset page, i.e. the top screen).
 """
 import base64
 import json

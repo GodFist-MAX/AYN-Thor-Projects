@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Coronamon's bug log, for reporting renderer crashes (CoroBugs). -->
     <queries>
@@ -21,6 +23,7 @@
         android:allowBackup="false"
         android:appCategory="video"
         android:hardwareAccelerated="true"
+        android:largeHeap="true"
         android:usesCleartextTraffic="true">
 
         <activity
@@ -51,15 +54,11 @@
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
-        <!-- Finished downloads; only the system's download manager holds the permission to send it. -->
-        <receiver
-            android:name=".DownloadDone"
-            android:exported="true"
-            android:permission="android.permission.SEND_DOWNLOAD_COMPLETED_INTENTS">
-            <intent-filter>
-                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
-            </intent-filter>
-        </receiver>
+        <!-- Saves episodes for offline play while AniDeck is in the background. -->
+        <service
+            android:name=".DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Recently played and saved shows for CrossBar's bottom screen; Feed checks the caller. -->
         <provider

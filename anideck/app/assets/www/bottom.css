@@ -83,7 +83,8 @@ input {
   background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .18); min-width: 0;
 }
 input:focus { border-color: var(--accent); }
-/* The controller highlight. */
+/* The controller highlight; the browser's own focus ring would be a second one. */
+:focus { outline: none; }
 .kfocus { outline: 4px solid var(--accent); outline-offset: 3px; box-shadow: 0 0 24px rgba(var(--accent-rgb), .55); }
 .tab.kfocus { outline-offset: -8px; border-radius: 18px; }
 .btn.primary.kfocus, .ctl.play.kfocus, .ranges button.on.kfocus, .ep.cur.kfocus, .seg button.on.kfocus { outline-color: #fff; }

@@ -1,7 +1,6 @@
 package dev.anideck.app;
 
 import android.app.Activity;
-import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -20,20 +19,22 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+
+import dev.anideck.app.ext.Images;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
-/** The bottom screen: a touch companion (player controls, lists, schedule, settings). */
+/** The bottom screen: a touch companion (player controls, lists, schedule, downloads, settings). */
 public class BottomActivity extends Activity {
-    private static final List<String> SETTINGS = Arrays.asList(App.SWITCHES);
     private static final String SHELF_HOST = "shelf.anideck";
 
     private final Handler h = new Handler(Looper.getMainLooper());
@@ -61,19 +62,21 @@ public class BottomActivity extends Activity {
                 return true;
             }
 
-            /** Covers of saved and recently played shows come from the Thor, so they show offline. */
+            /** Covers of the shows on the Thor come from the app, so they show offline. */
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
                 if (!SHELF_HOST.equals(u.getHost())) return null;
                 List<String> seg = u.getPathSegments();
-                if (seg.size() == 2 && "cover".equals(seg.get(0)) && seg.get(1).matches("\\d{1,9}")) {
-                    try {
-                        File f = Shelf.get(BottomActivity.this).cover(Integer.parseInt(seg.get(1)));
-                        return new WebResourceResponse("image/jpeg", null, new FileInputStream(f));
-                    } catch (IOException ignored) {
-                    }
+                File f = null;
+                if (seg.size() == 2 && "cover".equals(seg.get(0))) f = Shelf.get(BottomActivity.this).coverFile(seg.get(1));
+                else if (seg.size() == 2 && "img".equals(seg.get(0)) && u.getQueryParameter("u") != null) {
+                    f = Images.get(seg.get(1), u.getQueryParameter("u"));
                 }
-                return new WebResourceResponse("text/plain", null, 404, "Not Found", null, new ByteArrayInputStream(new byte[0]));
+                try {
+                    if (f != null && f.isFile()) return new WebResourceResponse("image/jpeg", null, new FileInputStream(f));
+                } catch (IOException ignored) {
+                }
+                return new WebResourceResponse("text/plain", null, 404, "Not Found", Map.of(), new ByteArrayInputStream(new byte[0]));
             }
 
             /** Both screens share one renderer; if either WebView leaves this unhandled, Android kills the app. */
@@ -157,7 +160,7 @@ public class BottomActivity extends Activity {
         });
     }
 
-    /** Opens a page on the top screen, which takes the controller with it. */
+    /** Opens something on the top screen, which takes the controller with it. */
     private void topPage(Consumer<MainActivity> f) {
         top(m -> {
             f.accept(m);
@@ -165,27 +168,22 @@ public class BottomActivity extends Activity {
         });
     }
 
-    private String version() {
-        try {
-            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-        } catch (PackageManager.NameNotFoundException e) {
-            return "";
-        }
-    }
-
     private final class Deck {
         @JavascriptInterface public String init() {
             JSONObject state, library;
+            JSONArray episodes;
             try {
                 state = new JSONObject(App.I.state);
                 library = new JSONObject(App.I.library.json());
+                episodes = new JSONArray(App.I.episodes);
             } catch (JSONException e) {
                 state = new JSONObject();
                 library = new JSONObject();
+                episodes = new JSONArray();
             }
             return App.obj("state", state, "library", library, "net", App.I.net.online(),
-                    "settings", App.I.settings(), "version", version(),
-                    "shelf", Shelf.get(BottomActivity.this).json(),
+                    "settings", App.I.settings(), "version", App.I.versionName(),
+                    "shelf", Shelf.get(BottomActivity.this).json(), "episodes", episodes,
                     "downloads", Downloads.get(BottomActivity.this).json()).toString();
         }
 
@@ -198,8 +196,8 @@ public class BottomActivity extends Activity {
             if (id != null) topPage(m -> m.playDownload(id));
         }
 
-        @JavascriptInterface public void closeDownload() {
-            top(MainActivity::closeDownload);
+        @JavascriptInterface public void closePlayer() {
+            top(MainActivity::closePlayer);
         }
 
         /** Cancel on a download that's going, Delete on one that's done. */
@@ -208,14 +206,16 @@ public class BottomActivity extends Activity {
         }
 
         @JavascriptInterface public void retryDownload(String id) {
-            if (id != null) top(m -> m.retryDownload(id));
+            if (id != null) h.post(() -> Downloads.get(BottomActivity.this).retry(id));
         }
 
         /** "Save show" on Now Playing. */
-        @JavascriptInterface public void save(int id, String title, boolean on) {
-            Shelf shelf = Shelf.get(BottomActivity.this);
-            if (on) shelf.save(id, title == null ? "" : title);
-            else shelf.unsave(id);
+        @JavascriptInterface public void save(String key, boolean on) {
+            if (key != null) Shelf.get(BottomActivity.this).save(key, on);
+        }
+
+        @JavascriptInterface public void forget(String key) {
+            if (key != null) Shelf.get(BottomActivity.this).forget(key);
         }
 
         @JavascriptInterface public void clearRecent() {
@@ -231,12 +231,19 @@ public class BottomActivity extends Activity {
             });
         }
 
+        /** A show from the AniList lists: its show on a source, found by title if it isn't linked yet. */
         @JavascriptInterface public void open(int id, int ep, String title) {
-            topPage(m -> m.openAnime(id, ep, title));
+            topPage(m -> m.openAniList(id, ep, title));
         }
 
-        @JavascriptInterface public void go(String path) {
-            if (path != null && path.startsWith("/") && !path.startsWith("//")) topPage(m -> m.go(path));
+        /** A show on the Thor (history, saved); resume plays where it was left off. */
+        @JavascriptInterface public void openShow(String key, boolean resume) {
+            if (key != null) topPage(m -> m.openShow(key, resume));
+        }
+
+        /** A page of the top screen's app, like "#/downloads". */
+        @JavascriptInterface public void go(String route) {
+            if (route != null && route.startsWith("#/")) topPage(m -> m.route(route));
         }
 
         @JavascriptInterface public void search(String query) {
@@ -244,10 +251,7 @@ public class BottomActivity extends Activity {
         }
 
         @JavascriptInterface public void login() {
-            topPage(m -> {
-                if (Site.isSite(android.net.Uri.parse(App.str(m.state(), "url")).getHost())) m.cmd(App.obj("c", "login"));
-                else m.go("/");
-            });
+            topPage(MainActivity::startLogin);
         }
 
         @JavascriptInterface public void sync() {
@@ -259,10 +263,11 @@ public class BottomActivity extends Activity {
         }
 
         @JavascriptInterface public void set(String key, boolean on) {
-            if (!SETTINGS.contains(key)) return;
-            App.I.prefs.edit().putBoolean(key, on).apply();
-            top(m -> m.cmd(App.obj("c", "prefs", "prefs", App.I.pagePrefs())));
-            App.I.toBottom("onSettings", App.I.settings().toString());
+            h.post(() -> App.I.set(key, on));
+        }
+
+        @JavascriptInterface public void choose(String key, String value) {
+            h.post(() -> App.I.set(key, value));
         }
 
         /** A real tap for the controller's A on a text field, so the keyboard opens. */
