@@ -108,5 +108,10 @@
             android:authorities="dev.crossbar.launcher.roms"
             android:exported="false"
             android:grantUriPermissions="true" />
+
+        <provider
+            android:name=".RecentProvider"
+            android:authorities="dev.crossbar.launcher.recent"
+            android:exported="true" />
     </application>
 </manifest>

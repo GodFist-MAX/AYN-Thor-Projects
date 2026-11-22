@@ -75,6 +75,9 @@ public class PlayerActivity extends Activity implements VideoEngine.Listener {
     private static final int A_REWIND = 1, A_PLAY = 2, A_PAUSE = 3, A_FORWARD = 4, A_NEXT = 5;
     private static final long STEP_US = 10_000_000L, JUMP_US = 60_000_000L;
 
+    /** The library video in the player right now (playing or paused), or -1. Coronamon's TV skips it. */
+    static volatile long playingId = -1;
+
     private static final class Item {
         final long id;
         final String title, sub;
@@ -235,6 +238,8 @@ public class PlayerActivity extends Activity implements VideoEngine.Listener {
         }
         index = i;
         Item it = items.get(i);
+        playingId = it.id;
+        App.I.store.videoOpened(it.id, it.title, it.sub);
         long resume = App.I.store.videoPosition(it.id);
         engine = new VideoEngine(this, uri(it), resume * 1000, this);
         if (surface != null) engine.setSurface(surface);
@@ -540,6 +545,7 @@ public class PlayerActivity extends Activity implements VideoEngine.Listener {
     protected void onDestroy() {
         h.removeCallbacksAndMessages(null);
         saveSpot();
+        playingId = -1;
         if (engine != null) engine.release();
         engine = null;
         App.I.lights.video(null);

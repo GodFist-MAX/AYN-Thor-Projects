@@ -6,7 +6,9 @@ import android.os.Environment;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 
 /** Settings and play history, persisted as JSON in app-private storage. */
 final class Store {
@@ -169,6 +171,39 @@ final class Store {
     synchronized long videoPosition(long id) {
         JSONObject h = history.optJSONObject("video:" + id);
         return h == null ? 0 : h.optLong("pos");
+    }
+
+    /** A library video started in the player. Its title is kept so Coronamon's TV can say what it is. */
+    synchronized void videoOpened(long id, String title, String sub) {
+        String key = "video:" + id;
+        JSONObject h = history.optJSONObject(key);
+        if (h == null) h = new JSONObject();
+        Util.put(h, "last", System.currentTimeMillis());
+        // "Video" is the player's stand-in when it wasn't given a name; keep the real one.
+        if (title != null && !title.isEmpty() && !"Video".equals(title)) {
+            Util.put(h, "title", title);
+            Util.put(h, "sub", sub);
+        }
+        Util.put(history, key, h);
+        Util.writeText(historyFile, history.toString());
+    }
+
+    /** Library videos played in the player, most recent first: their history entries plus "id". */
+    synchronized List<JSONObject> recentVideos(int max) {
+        List<JSONObject> out = new ArrayList<>();
+        for (Iterator<String> it = history.keys(); it.hasNext(); ) {
+            String k = it.next();
+            JSONObject h = k.startsWith("video:") ? history.optJSONObject(k) : null;
+            if (h == null || h.optLong("last") <= 0) continue;
+            try {
+                JSONObject o = Util.copy(h);
+                o.put("id", Long.parseLong(k.substring(6)));
+                out.add(o);
+            } catch (Exception ignored) {
+            }
+        }
+        out.sort((a, b) -> Long.compare(b.optLong("last"), a.optLong("last")));
+        return out.size() > max ? new ArrayList<>(out.subList(0, max)) : out;
     }
 
     synchronized void saveVideoPosition(long id, long ms) {
