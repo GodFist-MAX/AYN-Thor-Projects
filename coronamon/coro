@@ -19,6 +19,12 @@ Talks to the Coronamon app over adb (content://dev.grokbuild.coronamon.bridge).
   coro say TEXT | coro say --key KEY   make him talk
   coro act MOVE [SECS] | coro moves    play an animation ("hop" switches screens)
   coro hide [SECS] | coro show | coro summon top|bottom | coro den [top|bottom]
+  coro home [status|open|close|panel|panel-close] [top|bottom]
+                                       his home: the room he goes to while something plays on top, or the house
+                                       button and messages when a game uses the bottom screen too
+  coro messages                        what the house button would show: updates, crashes, problems
+  coro tv [status|next|prev|refresh|watch]
+                                       his TV, which replays what you watched lately (watch opens it on top)
   coro shot [top|bottom|both] [--hide] [--out DIR]
   coro setting [KEY [VALUE]] | coro lines [reload] | coro shizuku [request]
   coro setup                           grant permissions, start Shizuku, wake him
@@ -181,7 +187,10 @@ def cmd_status(args):
     if flag(args, "--json"):
         print(json.dumps(s, indent=2))
         return
-    where = "hidden" if not s["visible"] else ("hidden for %ds" % (s["hiddenFor"] / 1000) if s["hiddenFor"] else "on the %s screen" % s["screen"])
+    home = s.get("home") or {}
+    where = "hidden" if not s["visible"] else ("hidden for %ds" % (s["hiddenFor"] / 1000) if s["hiddenFor"] else
+                                              "at home (%s on the %s screen)" % (home["showing"], home["screen"]) if home.get("home") and home.get("screen") else
+                                              "at home" if home.get("home") else "on the %s screen" % s["screen"])
     print("Coronamon %s: %s, doing '%s'%s%s" % (s["version"], where, s["move"], ", ghosting (a game or video is on screen)" if s["ghost"] else "",
                                              ", working on %s %s" % (s["job"], s["jobApp"]) if s.get("job") else ""))
     if s.get("speaking"):
@@ -409,6 +418,39 @@ def cmd_den(args):
     need(bridge("den", args[0] if args else ""))
 
 
+def cmd_home(args):
+    action = args[0] if args else "status"
+    extra = {"screen": args[1]} if len(args) > 1 else {}
+    r = need(bridge("home", action, **extra))
+    r.pop("ok", None)
+    print(json.dumps(r, indent=2))
+
+
+def cmd_messages(args):
+    r = need(bridge("messages"))
+    msgs = r.get("messages") or []
+    if not msgs:
+        print("No messages. Everything's running fine.")
+        return
+    print("%d message%s, %d new" % (len(msgs), "" if len(msgs) == 1 else "s", r.get("unread", 0)))
+    for m in msgs:
+        when = time.strftime("%b %d %H:%M", time.localtime(m.get("t", 0) / 1000)) if m.get("t") else ""
+        print("\n%s %s  [%s%s]  %s" % ("*" if m.get("unread") else " ", m.get("title"), m.get("kind"),
+                                       ", can update" if m.get("update") else "", when))
+        if m.get("text"):
+            print("    " + m["text"])
+
+
+def cmd_tv(args):
+    r = need(bridge("tv", args[0] if args else "status"))
+    now = r.get("now")
+    print("TV: %s" % ("on" if r.get("on") else "off") + (", showing %s (%s)" % (now.get("title"), now.get("app")) if now and r.get("picture") else ""))
+    for it in r.get("items") or []:
+        mins = lambda ms: "%d:%02d" % (ms // 60000, ms // 1000 % 60)
+        print("  %-9s %s%s  [%s of %s]%s" % (it.get("app"), it.get("title"), " - " + it["sub"] if it.get("sub") else "",
+                                          mins(it.get("pos", 0)), mins(it.get("dur", 0)), "  (won't play)" if it.get("broken") else ""))
+
+
 def cmd_setting(args):
     if len(args) >= 2:
         r = need(bridge("setting", args[0], value=args[1]))
@@ -601,6 +643,7 @@ COMMANDS = {
     "register": cmd_register, "adopt": cmd_adopt, "forget": cmd_forget, "registry": cmd_registry, "history": cmd_history,
     "reports": cmd_reports, "report": cmd_report, "check": cmd_check, "update": cmd_update, "say": cmd_say, "act": cmd_act,
     "moves": cmd_moves, "hide": cmd_hide, "show": cmd_show, "summon": cmd_summon, "den": cmd_den, "shot": cmd_shot,
+    "home": cmd_home, "messages": cmd_messages, "tv": cmd_tv,
     "setting": cmd_setting, "lines": cmd_lines, "shizuku": cmd_shizuku, "setup": cmd_setup, "log": cmd_log,
     "brain": cmd_brain,
 }

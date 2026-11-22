@@ -47,7 +47,7 @@
       "label": "AniDeck",
       "pkg": "dev.anideck.app",
       "src": "~/anideck",
-      "files": ["build.sh", "app/", "dev/cdp.py", "dev/hist.py", "dev/pad.sh", "tools/make_icon.py"],
+      "files": ["build.sh", "app/", "dev/cdp.py", "dev/hist.py", "dev/pad.sh", "tools/make_icon.py", "tools/fetch_libs.sh"],
       "issues": "all"
     },
     "crossbar-launcher": {
@@ -57,7 +57,7 @@
       "files": [
         "build.sh", "app/",
         "dev/cdp.py", "dev/connect.sh", "dev/devserver.py", "dev/dual.sh", "dev/perf.py", "dev/shot.sh",
-        "tools/walls.py", "tools/make_icon.py", "tools/sync_googletv.sh"
+        "tools/walls.py", "tools/make_icon.py", "tools/sync_googletv.sh", "tools/build_audio.sh"
       ],
       "issues": "all"
     }

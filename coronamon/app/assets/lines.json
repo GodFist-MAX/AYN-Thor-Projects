@@ -220,6 +220,38 @@
       ["", "Game time! I'll get out of your way."],
       ["", "Ooh, {app}? I'll cheer from over here!"]
     ],
+    "home_enter": [
+      ["", "Enjoy your show! I'll be at my place if you need me."],
+      ["", "Ooh, you're busy up there? I'll go hang out at home!"],
+      ["", "Home sweet home! Holler if anything breaks."],
+      ["", "I'll keep my flame down and chill at home. Have fun!"],
+      ["", "Break time at my place! I can still keep an eye on your apps from here."]
+    ],
+    "home_leave": [
+      ["", "All done? I'm back!"],
+      ["", "Ta-da! Coronamon has returned!"],
+      ["", "Missed me? I tidied my room while you were busy!"],
+      ["", "Back on duty! What did I miss?"]
+    ],
+    "home_tv": [
+      ["", "Ooh, I remember this one! Rerun time."],
+      ["", "Don't worry, I muted it. I'm a great roommate."],
+      ["", "No spoilers, promise! I only watch the parts you've already seen."],
+      ["", "Bean bag, TV... this is the life."],
+      ["", "I'm catching up on what you watched. Good taste!"]
+    ],
+    "home_game": [
+      ["", "One more round... okay, maybe two!"],
+      ["", "Watch this combo! Corona Knuckle, digital edition!"],
+      ["", "High score, here I come!"],
+      ["", "This chair makes me at least twenty percent better at games. Probably."]
+    ],
+    "home_bed": [
+      ["", "Just resting my eyes... five more minutes..."],
+      ["", "Nap time! Wake me if anything crashes."],
+      ["", "My bed is so warm... oh wait, that's just me."],
+      ["", "Flame on low... zzz..."]
+    ],
     "hop": [
       ["", "Be right back! Gonna check the other screen."],
       ["", "Hup! Screen hop!"],

@@ -29,6 +29,12 @@ final class Brain {
         Settings settings();
 
         Lines lines();
+
+        /** Called every second: sends him home or brings him back. Returns true while he's home. */
+        boolean homeCheck();
+
+        /** Whether his TV has something of yours to play. */
+        boolean tvReady();
     }
 
     interface Prompt {
@@ -42,6 +48,8 @@ final class Brain {
         boolean on = true;
         boolean game;
         String topPkg, topLabel;
+        /** Where his feet rest, when it isn't the bottom edge (his room's floor). */
+        float floor;
     }
 
     static final float WALK = 85, RUN = 250, GRAVITY = 2600;
@@ -74,17 +82,29 @@ final class Brain {
     String job, jobApp;
     private long jobSince;
 
+    /** His room, in room units (see Room), while games and videos have the screens; null when he's out. */
+    Stage room;
+    /** The seat he's in or getting into, and how far in: 0 standing on the floor .. 1 settled. */
+    int seat = Room.NONE;
+    float seatBlend;
+    private float seatGoal;
+    /** What he's doing on his computer while he sits at it. */
+    int monitor = Room.SCREEN_GAME;
+    /** Arms up at the computer, 0..1: he's winning. */
+    float cheer;
+    private float cheerIn = 8, cheerFor;
+
     Brain(Host host) {
         this.host = host;
     }
 
     Stage stage() {
-        return host.stage(st);
+        return room != null ? room : host.stage(st);
     }
 
     float ground() {
         Stage s = stage();
-        return s.h - 4 * s.k;
+        return s.floor > 0 ? s.floor : s.h - 4 * s.k;
     }
 
     /** Keeps his mane and tail flame on screen. */
@@ -112,11 +132,12 @@ final class Brain {
     }
 
     boolean fast() {
-        return air || held || actor.move == Moves.RUN || actor.move == Moves.WALK || !actor.move.loop;
+        return air || held || actor.move == Moves.RUN || actor.move == Moves.WALK || !actor.move.loop || seatBlend != seatGoal
+                || (cheer > 0 && cheer < 1);
     }
 
     boolean asleep() {
-        return actor.move == Moves.SLEEP;
+        return actor.move == Moves.SLEEP || actor.move == Moves.LIE;
     }
 
     // ---- main loop ----
@@ -147,6 +168,7 @@ final class Brain {
         if (job != null && System.currentTimeMillis() - jobSince > 20 * 60_000L) endJob();
 
         energy = clamp(energy + dt * (asleep() ? 0.004f : -0.00045f), 0, 1);
+        seats(dt);
 
         gameCheck -= dt;
         if (gameCheck <= 0) {
@@ -163,6 +185,24 @@ final class Brain {
         actor.gazeY = lookBack ? 0.3f : 0.1f;
         lookBack = false;
         actor.tick(dt);
+    }
+
+    /** Getting into and out of seats, and cheering at his computer game. */
+    private void seats(float dt) {
+        float step = dt / 0.55f;
+        seatBlend = seatGoal > seatBlend ? Math.min(seatGoal, seatBlend + step) : Math.max(seatGoal, seatBlend - step);
+        if (seatBlend <= 0 && seatGoal <= 0) seat = Room.NONE;
+        boolean playing = seat == Room.CHAIR && seatBlend >= 1 && monitor == Room.SCREEN_GAME && actor.move == Moves.GAME;
+        if (playing) {
+            cheerIn -= dt;
+            if (cheerIn <= 0) {
+                cheerIn = 7 + rnd.nextFloat() * 12;
+                cheerFor = 1.2f + rnd.nextFloat();
+            }
+        }
+        cheerFor = playing ? cheerFor - dt : 0;
+        float want = cheerFor > 0 ? 1 : 0;
+        cheer = want > cheer ? Math.min(want, cheer + dt / 0.22f) : Math.max(want, cheer - dt / 0.35f);
     }
 
     private void physics(float dt, Stage s) {
@@ -369,6 +409,10 @@ final class Brain {
 
     private void plan() {
         Stage s = stage();
+        if (room != null) {
+            planHome();
+            return;
+        }
         if (ghost) {
             float edge = x < s.w / 2 ? margin() : s.w - margin();
             if (Math.abs(x - edge) > 4 * s.k) tasks.add(new WalkTo(edge, false));
@@ -467,6 +511,138 @@ final class Brain {
         return t.on && !t.game;
     }
 
+    // ---- at home ----
+
+    /** Into his room: he walks in from the right. The service shows the room, or a house button. */
+    void goHome(Stage r) {
+        if (ghost) {
+            ghost = false;
+            host.ghostChanged(false);
+        }
+        interrupt();
+        held = air = hopping = passFloor = false;
+        vx = vy = 0;
+        actor.spin = 0;
+        room = r;
+        seat = Room.NONE;
+        seatBlend = seatGoal = 0;
+        x = r.w + 90 * r.k;
+        y = ground();
+        facing = -1;
+        tasks.add(new WalkTo(r.w * (0.5f + rnd.nextFloat() * 0.2f), false).saying("home_enter", 0.7f));
+    }
+
+    /** Back out onto a screen. */
+    void leaveHome(int stageIndex) {
+        if (room == null) return;
+        room = null;
+        seat = Room.NONE;
+        seatBlend = seatGoal = 0;
+        cheer = cheerFor = 0;
+        interrupt();
+        actor.play(Moves.IDLE, 0.2f);
+        Stage s = host.stage(stageIndex);
+        place(stageIndex, s.w * (0.3f + rnd.nextFloat() * 0.4f));
+        tasks.add(new Play(Moves.WAVE, 0).saying("home_leave", 0.8f));
+    }
+
+    /** You tapped his bed, chair or bean bag: he goes and uses it. */
+    void visit(int which) {
+        if (room == null || held) return;
+        interrupt();
+        if (which == Room.BED) sitAt(Room.BED, Moves.LIE, 30 + rnd.nextFloat() * 30, "home_bed");
+        else if (which == Room.CHAIR) sitAt(Room.CHAIR, Moves.GAME, 40 + rnd.nextFloat() * 40, "home_game");
+        else if (which == Room.BEANBAG) sitAt(Room.BEANBAG, Moves.WATCH, 60 + rnd.nextFloat() * 60, "home_tv");
+    }
+
+    private void planHome() {
+        Stage s = room;
+        if (job != null) {
+            monitor = Room.SCREEN_CODE;
+            sitAt(Room.CHAIR, Moves.GAME, 20 + rnd.nextFloat() * 20, null);
+            return;
+        }
+        if ((night() && rnd.nextFloat() < 0.85f) || energy < 0.2f) {
+            sitAt(Room.BED, Moves.LIE, 90 + rnd.nextFloat() * 120, seat == Room.BED ? null : "home_bed");
+            return;
+        }
+        boolean tv = host.tvReady();
+        float tired = 1 - energy;
+        float[] w = {
+                tv ? 30 : 5,                   // 0 TV from the bean bag
+                energy > 0.3f ? 20 : 6,        // 1 games on his computer
+                6,                             // 2 coding on his computer
+                tired > 0.5f ? 16 : 3,         // 3 nap
+                12,                            // 4 wander
+                day() ? 5 : 3,                 // 5 look out of the window
+                3 + 4 * tired,                 // 6 stretch / yawn
+                energy > 0.5f ? 4 : 0,         // 7 dance
+                energy > 0.4f ? 4 : 0,         // 8 train
+                3,                             // 9 think
+        };
+        switch (pickWeighted(w)) {
+            case 0:
+                sitAt(Room.BEANBAG, Moves.WATCH, 60 + rnd.nextFloat() * 120, seat == Room.BEANBAG ? null : "home_tv");
+                break;
+            case 1:
+                monitor = Room.SCREEN_GAME;
+                sitAt(Room.CHAIR, Moves.GAME, 40 + rnd.nextFloat() * 80, seat == Room.CHAIR ? null : "home_game");
+                break;
+            case 2:
+                monitor = Room.SCREEN_CODE;
+                sitAt(Room.CHAIR, Moves.GAME, 25 + rnd.nextFloat() * 35, null);
+                break;
+            case 3:
+                if (seat != Room.BED) tasks.add(new Stand());
+                if (seat != Room.BED) tasks.add(new Play(Moves.YAWN, 0));
+                sitAt(Room.BED, Moves.LIE, 40 + rnd.nextFloat() * 60, null);
+                break;
+            case 4: {
+                float tx = margin() + rnd.nextFloat() * (s.w - 2 * margin());
+                tasks.add(new WalkTo(tx, false));
+                tasks.add(new Play(Moves.IDLE, 2 + rnd.nextFloat() * 3));
+                break;
+            }
+            case 5:
+                tasks.add(new WalkTo(Room.WINDOW_X, false));
+                tasks.add(new Play(day() ? Moves.BASK : Moves.LOOK_AROUND, 6 + rnd.nextFloat() * 6).saying(day() ? "bask" : null, 0.3f));
+                break;
+            case 6:
+                tasks.add(new Stand());
+                tasks.add(new Play(rnd.nextFloat() < 0.4f + tired * 0.4f ? Moves.YAWN : Moves.STRETCH, 0));
+                break;
+            case 7:
+                tasks.add(new WalkTo(s.w * 0.36f, false));
+                tasks.add(new Play(Moves.DANCE, 6 + rnd.nextFloat() * 4).saying("dance", 0.3f));
+                break;
+            case 8:
+                tasks.add(new WalkTo(s.w * 0.36f, false));
+                tasks.add(new Play(rnd.nextFloat() < 0.65f ? Moves.TRAIN : Moves.SQUATS, 6 + rnd.nextFloat() * 4));
+                break;
+            case 9:
+                tasks.add(new Stand());
+                tasks.add(new Play(Moves.THINK, 4 + rnd.nextFloat() * 3).saying("think", 0.4f));
+                break;
+        }
+    }
+
+    /** Walks over to a seat and settles into it for secs, or just keeps at it if he's already there. */
+    private void sitAt(int which, Moves.Move m, float secs, String sayKey) {
+        if (seat == which && seatGoal >= 1) {
+            tasks.add(new Play(m, secs).saying(sayKey, 0.35f));
+            return;
+        }
+        tasks.add(new WalkTo(Room.seatX(which), false));
+        tasks.add(new Sit(which, m).saying(sayKey, 0.35f));
+        tasks.add(new Play(m, secs));
+    }
+
+    private void standUp() {
+        if (seatGoal <= 0) return;
+        seatGoal = 0;
+        actor.play(Moves.IDLE, 0.35f);
+    }
+
     private void planJob() {
         if ("build".equals(job)) {
             if (rnd.nextFloat() < 0.25f) tasks.add(new Play(Moves.THINK, 3));
@@ -494,18 +670,21 @@ final class Brain {
         chatIn -= dt;
         if (chatIn > 0) return;
         chatIn = level >= 2 ? 40 + rnd.nextFloat() * 80 : 100 + rnd.nextFloat() * 160;
-        if (host.speaking()) return;
+        // At home you're watching or playing something on top: he talks half as much.
+        if (host.speaking() || (room != null && rnd.nextFloat() < 0.5f)) return;
         String key = night() ? "night" : rnd.nextFloat() < 0.55f ? "idle" : "quote";
         say(key, null, 1);
     }
 
     private void checkGames() {
+        if (host.homeCheck()) return;
         Stage s = stage();
         Settings set = host.settings();
         boolean game = s.game && !"stay".equals(set.games());
         boolean hopPending = cur instanceof Hop || hopping;
         for (Task t : tasks) hopPending |= t instanceof Hop;
-        if (game && "move".equals(set.games()) && canHop() && !held && !air && !hopPending) {
+        boolean moves = "move".equals(set.games()) || "home".equals(set.games());
+        if (game && moves && canHop() && !held && !air && !hopPending) {
             if (ghost) {
                 ghost = false;
                 host.ghostChanged(false);
@@ -614,7 +793,7 @@ final class Brain {
     boolean act(String name, float secs) {
         Moves.Move m = Moves.get(name);
         if (name.equals("hop")) {
-            if (otherStage() < 0) return false;
+            if (otherStage() < 0 || room != null) return false;
             interrupt();
             tasks.add(new Hop());
             return true;
@@ -743,14 +922,19 @@ final class Brain {
             return this;
         }
 
-        @Override
-        void start(Brain b) {
-            b.actor.play(run ? Moves.RUN : Moves.WALK, 0.2f);
-            super.start(b);
-        }
+        private boolean walking;
 
         @Override
         boolean step(Brain b, float dt) {
+            if (b.seat != Room.NONE) {
+                b.standUp();
+                t = 0;
+                return false;
+            }
+            if (!walking) {
+                walking = true;
+                b.actor.play(run ? Moves.RUN : Moves.WALK, 0.2f);
+            }
             Stage s = b.stage();
             float target = Math.max(b.margin(), Math.min(s.w - b.margin(), tx));
             float d = target - b.x;
@@ -762,6 +946,45 @@ final class Brain {
             b.actor.stride += stepPx / s.k;
             if (back) b.lookBack = true;
             return false;
+        }
+    }
+
+    /** Into a seat at home: a little hop in while the move fades in, ending up facing the room. */
+    final class Sit extends Task {
+        final int which;
+        final Moves.Move move;
+
+        Sit(int which, Moves.Move move) {
+            this.which = which;
+            this.move = move;
+        }
+
+        @Override
+        void start(Brain b) {
+            seat = which;
+            seatGoal = 1;
+            facing = Room.seatFacing(which);
+            actor.play(move, 0.35f);
+            super.start(b);
+        }
+
+        @Override
+        boolean step(Brain b, float dt) {
+            return seatBlend >= 1;
+        }
+    }
+
+    /** Out of whatever seat he's in. */
+    final class Stand extends Task {
+        @Override
+        void start(Brain b) {
+            standUp();
+            super.start(b);
+        }
+
+        @Override
+        boolean step(Brain b, float dt) {
+            return seat == Room.NONE;
         }
     }
 

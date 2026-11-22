@@ -10,6 +10,11 @@ final class Settings {
 
     Settings(Context ctx) {
         p = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE);
+        if (!p.getBoolean("homeAdded", false)) {
+            SharedPreferences.Editor e = p.edit().putBoolean("homeAdded", true);
+            if ("move".equals(p.getString("games", "move"))) e.putString("games", "home");
+            e.apply();
+        }
     }
 
     /** 0.75 small, 1 normal, 1.3 big. */
@@ -22,9 +27,12 @@ final class Settings {
         return p.getInt("chatter", 1);
     }
 
-    /** What he does when a game or video is on his screen: move, ghost, hide or stay. */
+    /**
+     * What he does when a game or video is on his screen: home (his room on the bottom screen while
+     * something's on top), move, ghost, hide or stay.
+     */
     String games() {
-        return p.getString("games", "move");
+        return p.getString("games", "home");
     }
 
     boolean nightSleep() {
@@ -69,6 +77,21 @@ final class Settings {
         return p.getBoolean("freshLines", true);
     }
 
+    /** Where you dragged his house button on a screen, as {x, y} in pixels, or null. */
+    int[] homeIcon(int displayId) {
+        String[] xy = p.getString("homeIcon" + displayId, "").split(",");
+        if (xy.length != 2) return null;
+        try {
+            return new int[]{Integer.parseInt(xy[0]), Integer.parseInt(xy[1])};
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    void homeIcon(int displayId, int x, int y) {
+        p.edit().putString("homeIcon" + displayId, x + "," + y).apply();
+    }
+
     /** Returns false for an unknown key or a bad value. */
     boolean set(String key, String value) {
         if (key == null || value == null) return false;
@@ -82,7 +105,7 @@ final class Settings {
                     e.putInt("chatter", Math.max(0, Math.min(2, Integer.parseInt(value))));
                     break;
                 case "games":
-                    if (!value.matches("move|ghost|hide|stay")) return false;
+                    if (!value.matches("home|move|ghost|hide|stay")) return false;
                     e.putString("games", value);
                     break;
                 case "nightSleep":

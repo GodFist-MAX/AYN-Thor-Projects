@@ -28,7 +28,15 @@ final class Foreground {
     }
 
     private static final Pattern DISPLAY = Pattern.compile("(?m)^Display #(\\d+)");
-    private static final Pattern RECORD = Pattern.compile("ActivityRecord\\{[0-9a-f]+ u\\d+ ([\\w.]+)/");
+    private static final Pattern RECORD = Pattern.compile("ActivityRecord\\{[0-9a-f]+ u\\d+ ([\\w.]+)/([\\w.$]+)");
+    private static final Pattern WINDOW = Pattern.compile("\n  Window #\\d+ ");
+    private static final Pattern WIN_DISPLAY = Pattern.compile("mDisplayId=(\\d+)");
+    private static final Pattern WIN_PACKAGE = Pattern.compile(" package=([\\w.]+)");
+    private static final Pattern WIN_PRESENTATION = Pattern.compile(" ty=(PRESENTATION|PRIVATE_PRESENTATION|2037|2030)\\b");
+    /** Activities that play video in an app that isn't a video app. */
+    private static final Set<String> VIDEO_ACTIVITIES = new HashSet<>(Arrays.asList("dev.crossbar.launcher/.PlayerActivity"));
+    /** A video app's menu or remote on the other screen: nothing to watch there. */
+    private static final Set<String> COMPANIONS = new HashSet<>(Arrays.asList("dev.anideck.app/.BottomActivity"));
     static final Set<String> EMULATORS = new HashSet<>(Arrays.asList(
             "com.retroarch.aarch64", "com.retroarch", "org.ppsspp.ppsspp", "org.ppsspp.ppssppgold", "me.magnum.melonds",
             "org.azahar_emu.azahar", "xyz.aethersx2.android", "dev.igawa6.edenduo", "cyou.joiplay.joiplay",
@@ -43,12 +51,18 @@ final class Foreground {
     private final Handler main, work;
     private final Listener listener;
     private volatile Map<Integer, String> last = new HashMap<>();
+    /** Display id to "package/.Activity" in front. */
+    private volatile Map<Integer, String> activities = new HashMap<>();
+    /** Display id to the app showing a presentation there: a dual-screen game's second screen. */
+    private volatile Map<Integer, String> presenting = new HashMap<>();
+    private volatile boolean watchWindows, windowsRead;
+    private final Runnable pollTask = this::poll;
     private final Map<String, Long> onScreenAt = new ConcurrentHashMap<>();
     /** The last app other than Coronamon's own screens (the den, the report trampoline) on each display. */
     private final Map<Integer, String> lastApp = new ConcurrentHashMap<>();
     private final Map<String, Boolean> avoidCache = new HashMap<>();
     private boolean running, denied;
-    private final File tmp;
+    private final File tmp, tmpWindows;
 
     Foreground(Context ctx, Registry registry, Handler main, Listener listener) {
         this.ctx = ctx;
@@ -59,12 +73,13 @@ final class Foreground {
         t.start();
         work = new Handler(t.getLooper());
         tmp = new File(ctx.getCacheDir(), "activities.txt");
+        tmpWindows = new File(ctx.getCacheDir(), "windows.txt");
     }
 
     void start() {
         if (running) return;
         running = true;
-        work.post(this::poll);
+        work.post(pollTask);
     }
 
     void stop() {
@@ -95,25 +110,91 @@ final class Foreground {
         return t != null && System.currentTimeMillis() - t <= ms;
     }
 
+    /** "package/.Activity" in front on the display, or null. */
+    String activity(int displayId) {
+        return activities.get(displayId);
+    }
+
+    /** The app showing a presentation (a dual-screen game's second screen) on the display, or null. */
+    String presenter(int displayId) {
+        return presenting.get(displayId);
+    }
+
+    /**
+     * Also read the window list each poll, for presentations, which don't show up as activities.
+     * It's a bigger dump, so only while a game or video is in front somewhere.
+     */
+    void watchWindows(boolean on) {
+        if (on == watchWindows) return;
+        watchWindows = on;
+        windowsRead = false;
+        if (!on) presenting = new HashMap<>();
+        if (on && running) {
+            work.removeCallbacks(pollTask);
+            work.post(pollTask);
+        }
+    }
+
+    /** Whether presentations have been checked since watchWindows(true). */
+    boolean windowsRead() {
+        return !watchWindows || windowsRead;
+    }
+
+    /**
+     * Whether what's in front on the display is something to watch or play: a game, an emulator or a
+     * video app (but not a video app's companion screen), a video in CrossBar's player, or another
+     * app's presentation.
+     */
+    boolean content(int displayId, String pkg) {
+        if (presenting.containsKey(displayId)) return true;
+        String act = activities.get(displayId);
+        if (act != null && VIDEO_ACTIVITIES.contains(act)) return true;
+        if (act != null && COMPANIONS.contains(act)) return false;
+        return avoid(pkg);
+    }
+
     private void poll() {
         if (!running) return;
-        Map<Integer, String> top = read();
+        Map<Integer, String> acts = new HashMap<>();
+        Map<Integer, String> top = read(acts);
         if (top != null) {
             long now = System.currentTimeMillis();
             for (Map.Entry<Integer, String> e : top.entrySet()) {
                 onScreenAt.put(e.getValue(), now);
                 if (!Registry.SELF.equals(e.getValue())) lastApp.put(e.getKey(), e.getValue());
             }
+            boolean windows = watchWindows;
+            Map<Integer, String> pres = windows ? presentations() : new HashMap<>();
+            if (!top.equals(last) || !acts.equals(activities) || !pres.equals(presenting)) {
+                last = top;
+                activities = acts;
+                presenting = pres;
+                Map<Integer, String> copy = new HashMap<>(top);
+                main.post(() -> listener.changed(copy));
+            }
+            if (windows) windowsRead = true;
         }
-        if (top != null && !top.equals(last)) {
-            last = top;
-            Map<Integer, String> copy = new HashMap<>(top);
-            main.post(() -> listener.changed(copy));
-        }
-        work.postDelayed(this::poll, 2500);
+        work.postDelayed(pollTask, 2500);
     }
 
-    private Map<Integer, String> read() {
+    private Map<Integer, String> presentations() {
+        Map<Integer, String> out = new HashMap<>();
+        try (FileOutputStream o = new FileOutputStream(tmpWindows)) {
+            if (!Debug.dumpService("window", o.getFD(), new String[]{"windows"})) return out;
+        } catch (Exception e) {
+            return out;
+        }
+        String s = Util.readText(tmpWindows);
+        if (s == null) return out;
+        for (String w : WINDOW.split(s)) {
+            if (!w.contains("isOnScreen=true") || !w.contains("mViewVisibility=0x0") || !WIN_PRESENTATION.matcher(w).find()) continue;
+            Matcher d = WIN_DISPLAY.matcher(w), p = WIN_PACKAGE.matcher(w);
+            if (d.find() && p.find() && !NEVER.contains(p.group(1))) out.put(Integer.parseInt(d.group(1)), p.group(1));
+        }
+        return out;
+    }
+
+    private Map<Integer, String> read(Map<Integer, String> acts) {
         try (FileOutputStream out = new FileOutputStream(tmp)) {
             if (!Debug.dumpService("activity", out.getFD(), new String[]{"activities"})) return null;
         } catch (Exception e) {
@@ -130,21 +211,25 @@ final class Foreground {
         Matcher d = DISPLAY.matcher(s);
         int prevId = -1, prevAt = -1;
         while (d.find()) {
-            if (prevId >= 0) put(top, prevId, s.substring(prevAt, d.start()));
+            if (prevId >= 0) put(top, acts, prevId, s.substring(prevAt, d.start()));
             prevId = Integer.parseInt(d.group(1));
             prevAt = d.end();
         }
         if (prevId >= 0) {
             int end = s.indexOf("\nActivityTaskSupervisor state:", prevAt);
-            put(top, prevId, s.substring(prevAt, end > prevAt ? end : s.length()));
+            put(top, acts, prevId, s.substring(prevAt, end > prevAt ? end : s.length()));
         }
         return top;
     }
 
-    private static void put(Map<Integer, String> top, int id, String section) {
+    private static void put(Map<Integer, String> top, Map<Integer, String> acts, int id, String section) {
         int r = section.indexOf("topResumedActivity=");
         Matcher m = RECORD.matcher(r >= 0 ? section.substring(r) : section);
-        if (m.find()) top.put(id, m.group(1));
+        if (!m.find()) return;
+        String pkg = m.group(1), act = m.group(2);
+        if (act.startsWith(pkg + ".")) act = act.substring(pkg.length());
+        top.put(id, pkg);
+        acts.put(id, pkg + "/" + act);
     }
 
     /** Games, emulators and video players: Coronamon keeps off their screen. */

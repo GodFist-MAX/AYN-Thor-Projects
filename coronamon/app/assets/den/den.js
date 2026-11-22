@@ -628,7 +628,7 @@
     const rows = [
       ['Size', 'how big I am', seg('size', s.size, [[0.8, 'Small'], [1, 'Normal'], [1.25, 'Big']])],
       ['Chatter', 'how often I talk', seg('chatter', s.chatter, [[0, 'Quiet'], [1, 'Normal'], [2, 'Chatty']])],
-      ['Games & videos', 'when one is on my screen', seg('games', s.games, [['move', 'Move away'], ['ghost', 'Ghost'], ['hide', 'Hide'], ['stay', 'Stay']])],
+      ['Games & videos', 'when one is on my screen', seg('games', s.games, [['home', 'Go home'], ['move', 'Move away'], ['ghost', 'Ghost'], ['hide', 'Hide'], ['stay', 'Stay']])],
       ['Screen', 'where I like to be', seg('screen', s.screen, [['auto', 'Both'], ['top', 'Top'], ['bottom', 'Bottom']])],
       ['Night sleep', '11 PM to 7 AM', seg('nightSleep', s.nightSleep, [[true, 'On'], [false, 'Off']])],
       ['Updates', 'for apps with GitHub releases', seg('updates', s.updates, [['ask', 'Ask me'], ['auto', 'Automatic'], ['off', 'Off']])],
@@ -657,6 +657,7 @@
       el('div', { class: 'buttons' },
         el('button', { onclick: () => safe(() => call('summon', 'top'), 'Coming up!') }, 'Call me to the top screen'),
         el('button', { onclick: () => safe(() => call('summon', 'bottom'), 'On my way down!') }, 'Call me to the bottom screen'),
+        el('button', { onclick: () => safe(() => call('home', 'open'), 'Come on in!') }, 'Visit my home'),
         el('button', { onclick: () => { const r = safe(() => call('shizuku')); toast(r === 'granted' ? 'Shizuku already trusts me.' : r === 'stopped' ? 'Shizuku is not running. Run coro setup on the Mac.' : 'Check the Shizuku prompt!'); } }, 'Connect Shizuku'),
         el('button', { onclick: () => safe(() => call('reloadLines'), 'Reloaded my lines.') }, 'Reload my lines')),
       el('p', { class: 'sub', style: 'color:var(--muted);margin-top:10px' },
@@ -674,7 +675,8 @@
       el('p', {}, el('b', {}, n + ' lines: '), data.sources[k] || (k ? k : 'Original lines written in his voice for this app')));
     return [el('div', { class: 'prose' },
       el('p', {}, "Coronamon lives on your Thor and looks after the apps Grok Build makes for it. He watches installs, updates and crashes, keeps reports, and wanders between the screens when he isn't busy."),
-      el('p', {}, 'Tap him to say hi, hold to pet him, drag to carry him, or fling him at the other screen. He moves out of the way of games and videos.'),
+      el('p', {}, 'Tap him to say hi, hold to pet him, drag to carry him, or fling him at the other screen.'),
+      el('p', {}, "While you watch or play something on the top screen he goes home: his room fills the bottom screen, with his bed, his computer and gaming chair, a bean bag, and a TV that replays what you've been watching (muted). Tap his furniture and he'll use it; tap the TV to skip or watch on top. If a game needs the bottom screen too, he stays home and leaves a house button there instead, with his messages about updates, crashes and anything he needs from you."),
       el('p', {}, 'With an xAI API key he gets a Grok brain: chat with him in the Talk tab (or with ', el('code', {}, 'coro brain ask'),
         ' from the Mac). He can check on apps, bugs and updates for you, and writes a fresh batch of lines about once a day. Anything that changes the Thor waits for your OK.'),
       el('h3', {}, 'Where his words come from'),

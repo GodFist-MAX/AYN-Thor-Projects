@@ -266,6 +266,59 @@ final class Moves {
         p[TAIL_CURL] = 0.7f;
     });
 
+    // ---- at home (the room turns, seats and draws him; these are the poses on top) ----
+
+    /** Asleep in bed. The room shows only his head on the pillow, facing out, with the body under the quilt. */
+    static final Move LIE = gazing("lie", 0, (p, t, a) -> {
+        float br = sn(t, 0.2f);
+        p[EYES] = 0;
+        p[ZZZ] = 1;
+        p[SMILE] = 0.4f;
+        p[MOUTH] = Math.max(0, 0.1f * br);
+        p[FLAME] = 0.45f + 0.05f * br;
+        p[TAIL_FLAME] = 0.6f;
+        p[TURN] = 0;
+    });
+
+    /** Sunk into the bean bag watching the TV on his right, laughing now and then. */
+    static final Move WATCH = gazing("watch", 0, (p, t, a) -> {
+        float laugh = bump(t % 11f, 7.5f, 9f);
+        p[SIT] = 1;
+        p[TORSO] = -8;
+        p[HEAD] = -6 - 4 * laugh;
+        p[HEAD_Y] = 0.6f * laugh * sn(t, 6);
+        p[LOOK_X] = 0.85f;
+        p[LOOK_Y] = -0.45f;
+        p[SMILE] = 0.7f + 0.3f * laugh;
+        p[MOUTH] = 0.1f + 0.5f * laugh;
+        p[HAPPY] = laugh > 0.5f ? 1 : 0;
+        p[FS] = 26;
+        p[FE] = 70;
+        p[BS] = 30;
+        p[BE] = 70;
+        p[FLX] = 4;
+        p[FLY] = 12 + 2 * sn(t, 0.4f);
+        p[BLX] = 2;
+        p[BLY] = 16;
+        p[TAIL] = -18 + 3 * sn(t, 0.2f);
+        p[TAIL_CURL] = 0.5f;
+    });
+
+    /** At the computer. The room shows him from behind; this is the pose while he climbs in. */
+    static final Move GAME = gazing("game", 0, (p, t, a) -> {
+        p[SIT] = 1;
+        p[FS] = 56;
+        p[FE] = 84;
+        p[BS] = 56;
+        p[BE] = 90;
+        p[BROW] = 0.6f;
+        p[LOOK_X] = 0.2f;
+        p[LOOK_Y] = -0.3f;
+        p[MOUTH] = 0.2f;
+        p[SMILE] = 0.8f;
+        p[TAIL] = -10 + 6 * sn(t, 0.5f);
+    });
+
     static final Move THINK = gazing("think", 0, (p, t, a) -> {
         p[FS] = 30;
         p[FE] = 136;

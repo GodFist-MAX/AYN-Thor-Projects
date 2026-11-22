@@ -66,6 +66,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     Mac mac;
     Diagnostics diag;
     Mind mind;
+    Home home;
     final Handler main = new Handler(Looper.getMainLooper());
     private final Random rnd = new Random();
 
@@ -76,12 +77,14 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     private long lastFrameNs;
     private Map<Integer, String> topApps;
     private int notifStage = -1;
-    private boolean notifVisible = true;
+    private boolean notifVisible = true, notifHome;
 
     private Lines.Line speaking;
     private long speakUntil;
     private Brain.Prompt prompt;
+    /** The window index his bubble is on, ROOM_BUBBLE for the one in his room, or -1. */
     private int bubbleStage = -1;
+    private static final int ROOM_BUBBLE = -2;
     private long lastStatusWrite;
     private boolean shizukuNagged;
     /** The package an install job is running for; its package broadcasts are the job's, not news. */
@@ -127,7 +130,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         }
     }
 
-    private static WindowManager.LayoutParams overlayParams(int w, int h) {
+    static WindowManager.LayoutParams overlayParams(int w, int h) {
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(w, h,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
@@ -163,6 +166,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         buildStages();
         int first = startStage();
         brain.place(first, stages.get(first).w * (0.3f + rnd.nextFloat() * 0.4f));
+        home = new Home(this);
         getSystemService(DisplayManager.class).registerDisplayListener(this, main);
         foreground = new Foreground(this, registry, main, this::onTopApps);
         foreground.start();
@@ -223,6 +227,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     @Override
     public void onDestroy() {
         stopLoop();
+        home.release();
         for (Win w : wins) {
             detach(w);
             detachBubble(w);
@@ -296,10 +301,22 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         return want;
     }
 
+    /** Whether he's out on a screen, in his own window (not at home, hidden or asleep with the screen off). */
     private boolean showing() {
-        if (!visible || System.currentTimeMillis() < hideUntil) return false;
+        if (brain.room != null || !visibleNow()) return false;
         if (ghost && "hide".equals(settings.games())) return false;
         return brain.stage().on;
+    }
+
+    /** Not hidden by you or the Mac (for a screenshot, say). */
+    boolean visibleNow() {
+        return visible && System.currentTimeMillis() >= hideUntil;
+    }
+
+    /** The window context for overlays on a display, or null. */
+    Context windowContext(int displayId) {
+        for (Win w : wins) if (w.stage.displayId == displayId) return w.ctx;
+        return null;
     }
 
     private void render() {
@@ -314,6 +331,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
                 detach(w);
             }
         }
+        home.render();
         updateBubble(show);
         long now = System.currentTimeMillis();
         if (now - lastStatusWrite > 30_000) {
@@ -323,7 +341,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
             } catch (Exception ignored) {
             }
         }
-        if (brain.st != notifStage || visible != notifVisible) refreshNotification();
+        if (brain.st != notifStage || visible != notifVisible || (brain.room != null) != notifHome) refreshNotification();
     }
 
     private void attach(Win w) {
@@ -407,15 +425,18 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         }
         float dt = (ns - lastFrameNs) / 1e9f;
         lastFrameNs = ns;
+        // Home with nothing of his on screen (just the house button): he only needs to keep time.
+        boolean unseen = brain.room != null && !home.roomShowing();
         try {
-            brain.tick(Math.min(dt, 0.06f));
+            brain.tick(Math.min(dt, unseen ? 0.3f : 0.06f));
             render();
         } catch (Exception e) {
             Log.w("frame", e);
         }
         boolean fast = brain.fast() || speaking != null;
         boolean slow = brain.asleep() && speaking == null;
-        if (fast) Choreographer.getInstance().postFrameCallback(this);
+        if (unseen) Choreographer.getInstance().postFrameCallbackDelayed(this, 250);
+        else if (fast) Choreographer.getInstance().postFrameCallback(this);
         else Choreographer.getInstance().postFrameCallbackDelayed(this, slow ? 55 : 22);
     }
 
@@ -446,6 +467,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     }
 
     private void rebuild() {
+        home.reset();
         int oldDisplay = brain.stage().displayId;
         buildStages();
         int idx = 0;
@@ -505,6 +527,16 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     }
 
     @Override
+    public boolean homeCheck() {
+        return home.check();
+    }
+
+    @Override
+    public boolean tvReady() {
+        return home.tvReady();
+    }
+
+    @Override
     public void stageChanged(int from, int to) {
         if (from >= 0 && from < wins.size()) detach(wins.get(from));
     }
@@ -541,16 +573,48 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
             prompt = null;
             old.chose(-1);
         }
+        String src = settings.showSources() && "ts".equals(line.src) ? "Digimon Story: Time Stranger" : null;
+        if (brain.room != null) {
+            if (!home.roomShowing()) {
+                // Home behind the house button: nobody's there to hear it. Questions stay in his messages.
+                if (speaking != null) endSpeech(-1);
+                if (p != null) p.chose(-1);
+                return;
+            }
+            if (bubbleStage >= 0) detachBubble(wins.get(bubbleStage));
+            speaking = line;
+            prompt = p;
+            speakUntil = 0;
+            home.showBubble(line.text, src, buttons);
+            bubbleStage = ROOM_BUBBLE;
+            Log.i("says at home: " + line.text);
+            return;
+        }
+        if (bubbleStage == ROOM_BUBBLE) home.hideBubble();
         speaking = line;
         prompt = p;
         speakUntil = 0;
-        String src = settings.showSources() && "ts".equals(line.src) ? "Digimon Story: Time Stranger" : null;
         Win w = wins.get(brain.st);
         ensureBubble(w);
         if (bubbleStage >= 0 && bubbleStage != brain.st) detachBubble(wins.get(bubbleStage));
         w.bubble.show(line.text, src, buttons);
         bubbleStage = brain.st;
         Log.i("says: " + line.text);
+    }
+
+    /** Going home: whatever he was saying on his own window stops. */
+    void endSpeechNow() {
+        if (speaking != null) endSpeech(-1);
+    }
+
+    /** His room is closing; a bubble in it goes with it. */
+    void roomClosed() {
+        if (bubbleStage == ROOM_BUBBLE) endSpeech(-1);
+    }
+
+    /** A button in (or a tap on) the bubble in his room. */
+    void roomBubbleDone(int choice) {
+        if (bubbleStage == ROOM_BUBBLE) endSpeech(choice);
     }
 
     private void ensureBubble(Win w) {
@@ -574,8 +638,25 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     private void updateBubble(boolean show) {
         if (speaking == null) {
             if (bubbleStage >= 0) detachBubble(wins.get(bubbleStage));
+            if (bubbleStage == ROOM_BUBBLE) home.hideBubble();
             bubbleStage = -1;
             brain.actor.talking = false;
+            return;
+        }
+        if (bubbleStage == ROOM_BUBBLE || brain.room != null) {
+            Bubble b = home.bubble();
+            if (bubbleStage != ROOM_BUBBLE || b == null || brain.room == null) {
+                endSpeech(-1);
+                return;
+            }
+            brain.actor.talking = b.typing();
+            long now = System.currentTimeMillis();
+            if (!b.typing() && speakUntil == 0) speakUntil = now + (b.hasButtons() ? 30_000 : b.readTime());
+            if (speakUntil > 0 && now > speakUntil) {
+                endSpeech(-1);
+                return;
+            }
+            home.placeBubble();
             return;
         }
         if (bubbleStage != brain.st) {
@@ -652,6 +733,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         speakUntil = 0;
         brain.actor.talking = false;
         if (bubbleStage >= 0) detachBubble(wins.get(bubbleStage));
+        if (bubbleStage == ROOM_BUBBLE) home.hideBubble();
         bubbleStage = -1;
         Brain.Prompt p = prompt;
         prompt = null;
@@ -702,22 +784,29 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         hideUntil = 0;
         settings.set("visible", String.valueOf(v));
         if (v) startLoop();
+        home.check();
         refreshNotification();
     }
 
     void hideFor(long ms) {
         hideUntil = System.currentTimeMillis() + ms;
+        home.check();
         render();
     }
 
     void showNow() {
         hideUntil = 0;
         if (!visible) setVisible(true);
+        else home.check();
     }
 
     void summon(int stageIndex) {
         if (stageIndex < 0 || stageIndex >= stages.size()) return;
         if (!stages.get(stageIndex).on) return;
+        if (brain.room != null) {
+            home.excuse(stageIndex);
+            return;
+        }
         brain.moveTo(stageIndex);
     }
 
@@ -727,6 +816,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     }
 
     void installNeedsTap() {
+        home.minimize();
         say(new Lines.Line("", "Android wants your OK for this one. Tap \"Install\" for me?"), null, null);
     }
 
@@ -895,7 +985,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
 
     /** Whether a speech bubble would be welcome: he's out, awake, and not ghosting for a game or video. */
     boolean canTalk() {
-        return showing() && !ghost && !brain.asleep();
+        return (showing() || (home.roomShowing() && visibleNow())) && !ghost && !brain.asleep();
     }
 
     /** Package in front on each screen, by screen name. */
@@ -977,7 +1067,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
             String pkg = top.get(s.displayId);
             s.topPkg = pkg;
             s.topLabel = pkg == null ? null : registry.label(pkg);
-            s.game = foreground.avoid(pkg);
+            s.game = foreground.content(s.displayId, pkg);
         }
         if (topApps != null) {
             for (Map.Entry<Integer, String> e : top.entrySet()) {
@@ -1128,9 +1218,11 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         JSONArray st = new JSONArray();
         for (Brain.Stage s : stages) {
             st.put(Util.obj("display", s.displayId, "name", s.name, "w", (int) s.w, "h", (int) s.h, "on", s.on,
-                    "top", s.topPkg, "avoid", s.game, "scale", Math.round(s.k * 100) / 100.0));
+                    "top", s.topPkg, "activity", foreground.activity(s.displayId), "presenting", foreground.presenter(s.displayId),
+                    "avoid", s.game, "scale", Math.round(s.k * 100) / 100.0));
         }
         Util.put(o, "stages", st);
+        Util.put(o, "home", home.status());
         Util.put(o, "bugs", Util.obj("waiting", bugs.waiting(), "rev", bugs.rev(), "lastSync", bugs.lastSync()));
         Util.put(o, "grok", Util.obj("state", grokState, "since", grokSince, "msg", grokMsg, "last", grokLast));
         Util.put(o, "brain", mind.summary());
@@ -1183,7 +1275,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
 
     private Notification petNotification() {
         String where = brain == null || stages.isEmpty() ? "on the Thor" : "on the " + brain.stage().name + " screen";
-        String title = visible ? "Coronamon is hanging out " + where : "Coronamon is resting in his den";
+        String title = !visible ? "Coronamon is resting in his den"
+                : brain != null && brain.room != null ? "Coronamon is at home while you watch" : "Coronamon is hanging out " + where;
         Notification.Builder b = new Notification.Builder(this, CH_PET)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle(title)
@@ -1200,6 +1293,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     private void refreshNotification() {
         notifStage = brain.st;
         notifVisible = visible;
+        notifHome = brain.room != null;
         getSystemService(NotificationManager.class).notify(NOTIF, petNotification());
     }
 

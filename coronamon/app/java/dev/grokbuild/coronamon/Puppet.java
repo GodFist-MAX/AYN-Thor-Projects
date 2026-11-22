@@ -106,6 +106,119 @@ final class Puppet {
         effects(v, t);
     }
 
+    /**
+     * Coronamon from behind, sitting at his computer, with the origin at his hips. over = false
+     * draws his back, raised fists and the back of his head, which the chair back covers from below;
+     * over = true draws his tail hanging off the side of the seat, in front of the chair.
+     * cheer (0..1) puts his fists up; sway leans his head as he plays.
+     */
+    void drawBack(Gfx gfx, float t, float cheer, float sway, boolean over) {
+        g = gfx;
+        fx = 0;
+        dir = 1;
+        lean = 0;
+        sqx = sqy = 1;
+        shake = 0;
+        lift = 0;
+        spin = 0;
+        if (over) {
+            g.save();
+            g.translate(58, 46);
+            drawTail(gfx, t);
+            g.restore();
+            return;
+        }
+        float bob = 1.3f * (float) Math.sin(t * 2.4f) - 5 * cheer;
+        g.path();
+        g.moveTo(-27, -12);
+        g.cubicTo(-31, -40, -24, -60, 0, -62);
+        g.cubicTo(24, -60, 31, -40, 27, -12);
+        g.close();
+        g.fillLinear(-24, -60, 24, -12, new int[]{SKIN, SKIN_SHADE}, new float[]{0, 1});
+        g.stroke(OUTLINE, 2.4f);
+        if (cheer > 0.01f) {
+            for (int side = -1; side <= 1; side += 2) {
+                float sx = side * 22, sy = -50;
+                float ex = side * (40 + 12 * cheer), ey = sy - 26 * cheer - 2;
+                float wx = side * (46 + 26 * cheer), wy = ey - 32 * cheer - 2;
+                limb(sx, sy, ex, ey, wx, wy, 14f, 12.5f);
+                g.fillLinear(sx - 8, sy, wx + 8, wy, new int[]{SKIN_LIGHT, SKIN, SKIN_SHADE}, new float[]{0, 0.5f, 1});
+                g.stroke(OUTLINE, 2.3f);
+                g.path();
+                g.moveTo(wx - 9, wy + 6);
+                g.lineTo(wx + 9, wy + 6);
+                g.lineTo(wx + 8.6f, wy - 4);
+                g.lineTo(wx - 8.6f, wy - 4);
+                g.close();
+                g.fill(BAND);
+                g.stroke(OUTLINE, 1.6f);
+                g.path();
+                g.oval(wx, wy - 13, 13, 12.5f);
+                g.fillLinear(wx - 6, wy - 20, wx + 6, wy - 6, new int[]{SKIN_LIGHT, SKIN, SKIN_SHADE}, new float[]{0, 0.5f, 1});
+                g.stroke(OUTLINE, 1.9f);
+                if (cheer > 0.6f) flame(wx, wy - 22, 16 * cheer, 8 * cheer, t, side * 7);
+            }
+        }
+        g.save();
+        g.translate(sway * 5, -92 + bob);
+        g.rotate(sway * 6);
+        g.scale(HEAD_SCALE, HEAD_SCALE);
+        flame(0, GEM_Y - 3, 66, 24, t, 0, HOT_COLS, HOT_SIZES);
+        headPoints(t);
+        g.path();
+        loop(headPts);
+        g.fillLinear(0, -90, 0, 42, new int[]{MANE_LIGHT, MANE, MANE_SHADE, MANE_DEEP}, new float[]{0, 0.35f, 0.7f, 1});
+        g.stroke(OUTLINE, 2.4f);
+        g.path();
+        for (int side = -1; side <= 1; side += 2) {
+            for (float[] gr : GROOVES) {
+                g.moveTo(-side * gr[0], gr[1]);
+                g.quadTo(-side * gr[2], gr[3], -side * gr[4], gr[5]);
+            }
+        }
+        g.moveTo(-13, -30);
+        g.quadTo(-16, -4, -11, 20);
+        g.moveTo(13, -30);
+        g.quadTo(16, -4, 11, 20);
+        g.moveTo(0, -36);
+        g.quadTo(1.5f, -10, 0, 14);
+        g.stroke(argb(0.55f, MANE_DEEP), 1.6f);
+        mane(t);
+        g.restore();
+    }
+
+    /** His tail coming out at the origin and curling up and right, with the fireball on its tip. */
+    void drawTail(Gfx gfx, float t) {
+        g = gfx;
+        float a = 6 * (float) Math.sin(t * 1.9f);
+        g.path();
+        taper(0, 0, 30, 8, 52 + a * 0.3f, -14, 44 + a, -52, 9, 5.5f, 0, false, true);
+        g.fillLinear(0, -50, 50, 0, new int[]{SKIN, SKIN_SHADE}, new float[]{0, 1});
+        g.stroke(OUTLINE, 2.2f);
+        fireball(44 + a, -56, 12.5f, 1, t);
+    }
+
+    /** Only his head, centred on the origin and tilted, plus its effects (the Zs): asleep on his pillow. */
+    void drawHead(Gfx gfx, Pose pose, float t, float tilt) {
+        g = gfx;
+        float[] v = pose.v;
+        dir = v[FACING] < 0 ? -1 : 1;
+        lift = 0;
+        lean = 0;
+        sqx = sqy = 1;
+        shake = 0;
+        spin = 0;
+        rig(v);
+        hx = 0;
+        hy = 0;
+        ha = tilt;
+        g.save();
+        g.scale(dir, 1);
+        head(v, t);
+        g.restore();
+        effects(v, t);
+    }
+
     // ---- rig ----
 
     private void rig(float[] v) {

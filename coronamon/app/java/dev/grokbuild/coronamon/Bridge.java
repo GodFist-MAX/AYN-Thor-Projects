@@ -259,6 +259,12 @@ public final class Bridge extends ContentProvider {
             case "brain-clear":
                 s.mind.clear(arg == null ? "chat" : arg);
                 return Util.obj("ok", true);
+            case "home":
+                return s.home.command(arg == null || arg.isEmpty() ? "status" : arg, str(in, "screen", b64));
+            case "messages":
+                return Util.obj("ok", true, "unread", s.home.messages.unread(), "messages", s.home.messages.toJson());
+            case "tv":
+                return s.home.tvCommand(arg == null || arg.isEmpty() ? "status" : arg);
             case "den": {
                 Intent i = new Intent(s, DenActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 int idx = s.stageIndexOf(arg == null ? "" : arg);

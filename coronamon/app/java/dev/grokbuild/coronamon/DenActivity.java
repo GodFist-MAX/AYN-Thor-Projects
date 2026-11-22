@@ -295,6 +295,15 @@ public final class DenActivity extends Activity {
             return call(s -> s.brain.act(move, 0));
         }
 
+        /** open, close or panel: his home on the bottom screen. */
+        @JavascriptInterface
+        public String home(String action) {
+            return call(s -> {
+                s.showNow();
+                return s.home.command(action, null);
+            });
+        }
+
         @JavascriptInterface
         public String say(String key) {
             return call(s -> {

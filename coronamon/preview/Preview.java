@@ -37,6 +37,11 @@ public class Preview {
             PreviewAnim.bounds();
             return;
         }
+        if (mode.equals("room")) {
+            PreviewRoom.render(args[1], args.length > 2 ? args[2] : "all", args.length > 3 ? Float.parseFloat(args[3]) : 14,
+                    args.length > 4 ? Float.parseFloat(args[4]) : 1);
+            return;
+        }
         if (mode.equals("one")) {
             Map<String, Pose> one = new LinkedHashMap<>();
             one.put(args[2], samples().get(args[2]));
