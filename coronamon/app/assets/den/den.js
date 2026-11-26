@@ -6,7 +6,7 @@
   const TITLES = { apps: 'Apps', talk: 'Talk', activity: 'Activity', bugs: 'Bugs', grok: 'Grok Build', inbox: 'Inbox', settings: 'Settings', about: 'About' };
   const QUIPS = {
     apps: 'Everything Grok Build made for the Thor. I keep an eye on all of it!',
-    talk: 'Ask me anything about the Thor... or just hang out!',
+    talk: 'Type to me here, or double-tap me and talk out loud!',
     activity: "Builds, installs, crashes... I remember all of it.",
     bugs: "Anything that breaks goes to Grok next time we're plugged into the Mac.",
     grok: 'I can ask the Mac to check on Grok Build, pause it or stop it.',
@@ -516,8 +516,10 @@
   // ---- talk: his Grok brain ----
 
   const MODELS = [['grok-4.7', 'Smartest'], ['grok-4.20-0309-non-reasoning', 'Fastest']];
+  const VOICES = [['kepler', 'Kepler'], ['sal', 'Sal'], ['naksh', 'Naksh'], ['helix', 'Helix'], ['rex', 'Rex']];
   const ACTED = { done: 'done', doing: 'working on it...', declined: 'you said no', failed: "that didn't work" };
-  let talkDraft = '', talkRev = -1, talkPoll = 0, keyForm = false;
+  const ALOUD = { listening: 'Listening...', thinking: 'Thinking...', speaking: 'Talking...' };
+  let talkDraft = '', talkRev = -1, voiceRev = -1, talkPoll = 0, keyForm = false;
 
   function money(n) {
     return '$' + (n || 0).toFixed(n && n < 0.1 ? 3 : 2);
@@ -526,6 +528,7 @@
   function talk() {
     const b = call('brain');
     talkRev = b.rev;
+    voiceRev = b.voice ? b.voice.rev : -1;
     if (!b.hasKey || keyForm) return keyView(b);
     const out = [];
     if (!b.on) out.push(el('div', { class: 'note' }, 'My Grok brain is switched off. Turn it back on in Settings and we can talk.'));
@@ -544,6 +547,8 @@
     });
     out.push(log, el('div', { class: 'talkbar' }, box,
       el('button', { class: 'primary', 'data-k': 'send', disabled: b.busy || !b.on, onclick: sendTalk }, 'Send')));
+    const vb = voiceBar(b);
+    if (vb) out.push(vb);
     const t = b.today || {};
     const model = (MODELS.find(([id]) => id === b.model) || [b.model, b.model])[1];
     out.push(el('div', { class: 'talkfoot' },
@@ -555,9 +560,22 @@
     return out;
   }
 
+  /** Talking out loud: what he's doing right now, with Stop; or the button that makes him listen. */
+  function voiceBar(b) {
+    const v = b.voice;
+    if (!v || !v.on) return null;
+    const live = v.state !== 'idle';
+    const text = live ? ALOUD[v.state] + (v.heard ? '  “' + v.heard + '”' : '')
+      : v.error ? 'Last time: ' + v.error : 'Or double-tap me on screen and talk out loud.';
+    return el('div', { class: 'voicebar' + (live ? ' live' : '') }, el('span', {}, text),
+      live ? el('button', { 'data-k': 'voice-stop', onclick: () => { safe(() => call('voiceStop')); render(); } }, 'Stop')
+        : el('button', { class: 'primary', 'data-k': 'voice', disabled: b.busy || !b.on,
+          onclick: () => { if (safe(() => call('voiceStart'))) render(); } }, 'Talk out loud'));
+  }
+
   function said(m) {
     const you = m.role === 'user', oops = m.role === 'error';
-    const kids = [el('span', { class: 'who' }, you ? 'You' : 'Coronamon'), el('div', {}, m.text)];
+    const kids = [el('span', { class: 'who' }, (you ? 'You' : 'Coronamon') + (m.from === 'voice' ? ', out loud' : '')), el('div', {}, m.text)];
     for (const a of m.actions || []) {
       kids.push(a.state === 'asked'
         ? el('div', { class: 'acts' },
@@ -609,8 +627,9 @@
       if (current !== 'talk' || keyForm) return;
       let b = null;
       try { b = call('brain'); } catch (e) { /* the service may be restarting */ }
-      if (b && b.rev !== talkRev && !overlay()) render();
-      else talkPoll = setTimeout(tick, b && b.busy ? 800 : 4000);
+      const v = (b && b.voice) || {};
+      if (b && (b.rev !== talkRev || (v.rev != null && v.rev !== voiceRev)) && !overlay()) render();
+      else talkPoll = setTimeout(tick, v.state && v.state !== 'idle' ? 500 : b && b.busy ? 800 : 4000);
     }, 800);
   }
 
@@ -638,6 +657,11 @@
       ['Brain model', 'Fastest is also cheapest', seg('brainModel', s.brainModel, MODELS)],
       ['Daily limit', 'Grok spending per day', seg('brainCap', s.brainCap, [[0.25, '$0.25'], [1, '$1'], [3, '$3'], [10, '$10']])],
       ['Fresh lines', (b.fresh.count ? b.fresh.count + ' from Grok' : 'new things to say') + ', daily', seg('freshLines', s.freshLines, [[true, 'On'], [false, 'Off']])],
+      ['Voice chat', 'double-tap me to talk out loud', seg('voice', s.voice, [[true, 'On'], [false, 'Off']])],
+      ['My voice', "one of xAI's voices", seg('voiceId', s.voiceId, VOICES)],
+      ['Voice speed', 'how fast I talk', seg('voiceSpeed', s.voiceSpeed, [[0.9, 'Calm'], [1.05, 'Normal'], [1.2, 'Quick']])],
+      ['Keep listening', 'a few seconds after I answer', seg('voiceFollowUp', s.voiceFollowUp, [[true, 'On'], [false, 'Off']])],
+      ['Screens dim', 'when nobody touches the Thor', seg('dimHome', s.dimHome, [[true, 'I go to my room'], [false, 'I stay out']])],
     ].map(([label, small, ctl]) => el('div', { class: 'row' }, el('div', { class: 'label' }, label, small ? el('small', {}, small) : null), ctl));
     const p = st.permissions || {};
     const missing = Object.entries(p).filter(([, v]) => !v).map(([k]) => k);
@@ -653,7 +677,8 @@
         b.hasKey && s.freshLines && el('button', { onclick: () => {
           const r = safe(() => call('brainLines'));
           if (r != null) toast(r ? 'Writing some new lines. They take a couple of minutes.' : 'Already writing some, or the daily limit is reached.');
-        } }, 'New lines now')),
+        } }, 'New lines now'),
+        b.hasKey && s.voice && el('button', { 'data-k': 'voice-try', onclick: () => safe(() => call('voiceTry'), 'Listen up!') }, 'Hear my voice')),
       el('div', { class: 'buttons' },
         el('button', { onclick: () => safe(() => call('summon', 'top'), 'Coming up!') }, 'Call me to the top screen'),
         el('button', { onclick: () => safe(() => call('summon', 'bottom'), 'On my way down!') }, 'Call me to the bottom screen'),
@@ -679,6 +704,8 @@
       el('p', {}, "While you watch or play something on the top screen he goes home: his room fills the bottom screen, with his bed, his computer and gaming chair, a bean bag, and a TV that replays what you've been watching (muted). Tap his furniture and he'll use it; tap the TV to skip or watch on top. If a game needs the bottom screen too, he stays home and leaves a house button there instead, with his messages about updates, crashes and anything he needs from you."),
       el('p', {}, 'With an xAI API key he gets a Grok brain: chat with him in the Talk tab (or with ', el('code', {}, 'coro brain ask'),
         ' from the Mac). He can check on apps, bugs and updates for you, and writes a fresh batch of lines about once a day. Anything that changes the Thor waits for your OK.'),
+      el('p', {}, "Double-tap him to talk out loud. He listens with xAI's speech-to-text, answers with his Grok brain, and talks back in his own voice with xAI's text-to-speech, then listens a few more seconds in case you answer. Tap him when you've finished talking, or while he talks to hush him. His voice counts toward the same daily limit."),
+      el('p', {}, "When the screens dim because nobody's touched the Thor for a while, he heads to his room on the bottom screen, and walks back out when you're back."),
       el('h3', {}, 'Where his words come from'),
       src,
       el('p', {}, 'Add your own in ', el('code', {}, 'Coronamon/lines.json'), ' on the Thor\'s storage.'),
@@ -832,6 +859,10 @@
       closeReportForm(true);
       show('bugs');
       openReportForm(cap);
+    },
+    toast(msg) {
+      toast(msg);
+      if (current === 'talk') render();
     },
   };
 

@@ -5,9 +5,11 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
@@ -37,6 +39,16 @@ final class Home implements RoomView.Touch, Tv.Listener {
     private boolean minimized;
     /** You called him out of his home. He stays out until what's on screen changes. */
     private boolean excused;
+    /** Android dimmed the screens (nobody's touching the Thor): he waits in his room until you're back. */
+    private boolean dimmed;
+    /**
+     * The room is up only because the screens dimmed. A touch there wakes the Thor and he comes out,
+     * so it doesn't press anything in the room except him: double-tapping him still starts a chat.
+     */
+    private boolean dimOnly;
+    /** He stays in a moment after your last touch there, so a second tap doesn't land on the app underneath. */
+    private long holdUntil;
+    private final Runnable recheck = this::check;
     private String contentKey = "";
     private long badgeAt;
 
@@ -83,11 +95,25 @@ final class Home implements RoomView.Touch, Tv.Listener {
             minimized = false;
             excused = false;
         }
-        boolean auto = "home".equals(svc.settings.games()) && !excused && (topBusy || (bottomBusy && (top == null || !top.on)));
+        boolean dim = svc.settings.dimHome() && svc.dimmer.dimmed() && !svc.voice.active();
+        if (dim != dimmed) {
+            dimmed = dim;
+            if (dim) minimized = false;
+            Log.i("home: screens " + (dim ? "dimmed, going in" : "bright again"));
+        }
+        boolean content = "home".equals(svc.settings.games()) && !excused && (topBusy || (bottomBusy && (top == null || !top.on)));
+        boolean auto = dim || content;
+        dimOnly = (dim || (dimOnly && brain.room != null)) && !content && !manual;
         if ((manual || auto) && brain.room == null) {
             enter(bottom != null && bottom.on ? bottom : top != null ? top : bottom);
         } else if (!manual && !auto && brain.room != null) {
-            leave(-1);
+            long wait = holdUntil - SystemClock.uptimeMillis();
+            if (wait > 0 && !svc.voice.active()) {
+                main.removeCallbacks(recheck);
+                main.postDelayed(recheck, wait + 20);
+            } else {
+                leave(-1);
+            }
         }
         layout(top, bottom, bottomBusy);
         long now = System.currentTimeMillis();
@@ -270,7 +296,7 @@ final class Home implements RoomView.Touch, Tv.Listener {
         Integer on = room != null ? Integer.valueOf(room.displayId) : icon != null ? Integer.valueOf(icon.displayId) : null;
         Tv.Item now = tv.current();
         return Util.obj("home", b.room != null, "showing", showing, "screen", on == null ? null : Screens.name(on),
-                "manual", manual, "minimized", minimized, "excused", excused, "watching", contentKey,
+                "manual", manual, "minimized", minimized, "excused", excused, "dimmed", dimmed, "watching", contentKey,
                 "seat", b.seat == Room.BED ? "bed" : b.seat == Room.CHAIR ? "chair" : b.seat == Room.BEANBAG ? "bean bag" : null,
                 "unread", messages.unread(), "panel", panel != null, "tvReady", tv.ready(),
                 "tvShowing", now != null && tv.picture() ? now.label() : null);
@@ -351,10 +377,16 @@ final class Home implements RoomView.Touch, Tv.Listener {
 
     // ---- touches in the room ----
 
+    /** A touch in the room the dimmed screens sent him to: they're waking up, so he heads out just after your last touch. */
+    private void woke(MotionEvent e) {
+        if (e.getActionMasked() == MotionEvent.ACTION_DOWN) svc.dimmer.poke();
+        holdUntil = SystemClock.uptimeMillis() + 700;
+    }
+
     @Override
     public void tapPet() {
         svc.brain.touchDown();
-        svc.brain.tap();
+        svc.petTapped();
     }
 
     @Override
@@ -502,7 +534,16 @@ final class Home implements RoomView.Touch, Tv.Listener {
             scale = Math.min(w / Room.W, h / Room.H);
             ox = (w - Room.W * scale) / 2;
             oy = (h - Room.H * scale) / 2;
-            frame = new FrameLayout(ctx);
+            frame = new FrameLayout(ctx) {
+                private boolean swallow;
+
+                @Override
+                public boolean dispatchTouchEvent(MotionEvent e) {
+                    if (e.getActionMasked() == MotionEvent.ACTION_DOWN) swallow = dimOnly && !onPet(e);
+                    if (dimOnly) woke(e);
+                    return swallow || super.dispatchTouchEvent(e);
+                }
+            };
             root = frame;
             lp = fullScreen("Coronamon home");
 
@@ -592,6 +633,10 @@ final class Home implements RoomView.Touch, Tv.Listener {
             FrameLayout.LayoutParams xlp = new FrameLayout.LayoutParams(bs, bs, Gravity.TOP | Gravity.END);
             xlp.setMargins(0, px(8), px(8), 0);
             frame.addView(close, xlp);
+        }
+
+        boolean onPet(MotionEvent e) {
+            return view.onPet(e.getX(), e.getY());
         }
 
         @Override

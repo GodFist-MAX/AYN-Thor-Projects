@@ -8,6 +8,8 @@ Package: `dev.grokbuild.coronamon`
 
 - **Lives on both screens:** he's drawn in code, with no sprites. He walks, hops between screens, sleeps at night (23:00–07:00), and reacts to taps, petting, dragging and flinging.
 - **Stays out of the way:** for games, emulators and videos he hops to the other screen. When both screens are busy, he becomes a see-through ghost at the edge that doesn't block touches.
+- **Talks out loud:** double-tap him (or press Talk out loud in the Den's Talk tab) and he listens with xAI's speech-to-text, answers in character with his Grok brain, and talks back with xAI's text-to-speech, his mouth moving with the words. He keeps listening a few seconds in case you answer. Tap him when you've finished talking, or to hush him. Voice, speed and follow-up listening are in Settings, and his voice counts toward the brain's daily limit.
+- **Waits in his room when the screens dim:** when nobody's touched the Thor for a while, he goes to his room on the bottom screen, and comes back out when you're back. The touch that wakes the screens doesn't press anything in the room except him, so you can double-tap him there to talk.
 - **Keeps a registry:** every app built with Grok Build or installed over adb, with versions and history.
 - **Installs and updates apps:** as their installer of record, through Shizuku. He keeps the last three APKs of each in `/sdcard/Coronamon/apks/`, and checks GitHub releases every 12 hours.
 - **Watches for crashes and ANRs:** he saves reports to `/sdcard/Coronamon/reports/<package>/`.
@@ -31,6 +33,8 @@ coro register PKG [--github OWNER/REPO] [--update-mode ask|auto|notify|off] [--a
 coro registry | history [N] | reports [PKG] | check [PKG] | update PKG
 coro say TEXT | act MOVE | moves | hide [SECS] | show | summon top|bottom | den
 coro shot [top|bottom|both] [--hide]
+coro voice [status] | listen | stop | say TEXT | hear WAV [--reply] | voices | use VOICE
+                                     talk out loud with him, or test his voice from the Mac
 coro setup                           grant permissions, start Shizuku, wake him
 ```
 
@@ -73,7 +77,7 @@ coro setup
 
 `coro setup` grants these over adb:
 - the overlay, all-files, usage-stats and install permissions
-- log and dumpsys access, and notifications
+- log and dumpsys access, notifications, and the microphone (for talking out loud)
 
 Silent installs and updates on the device also need [Shizuku](https://github.com/RikkaApps/Shizuku). Grant it from the Den's settings.
 
@@ -97,3 +101,4 @@ Coronamon is a Digimon (© Bandai, Toei Animation). This is a fan project. Speec
 - **2026-11-16:** Fixed updates installed on the Thor itself (the Update button and automatic updates): they always failed, because Android won't let the package manager read the shared storage where Coronamon saves downloads, and the log showed an unrelated SELinux line instead of the real error. He now hands the APK to the package manager directly, and a failed install shows the actual reason. On the Mac, a Coronamon command that gets no answer now says what the Thor printed instead of just 'no reply', and the update check that runs when the Thor is plugged in tries again in 5 minutes (up to 3 times) if it fails. Verified by installing the Eden Duo 1.4.0 and Persona 5 Royal 0.5.13 updates that had failed.
 - **2026-11-18:** Grok brain: Coronamon can now think with xAI's Grok. Chat with him in the Den's new Talk tab (or coro brain ask from the Mac). He looks up the Thor's battery, screens, apps, bugs, updates and diagnostics, and asks before opening an app, installing an update or saving a bug report. Every day Grok writes a fresh batch of lines in his voice that mix in with his built-in ones. The API key is stored encrypted on the Thor (Android Keystore) and only ever sent to xAI. Settings has a daily spending limit (default $1) and a Smartest/Fastest model choice, and diagnostics show the brain's state.
 - **2026-11-22:** Coronamon has a home. While you watch or play something on the top screen he goes home, and his room fills the bottom screen: a bed, a desk with his computer and gaming chair, a bean bag, and a TV that replays what you watched lately in CrossBar and AniDeck (muted, and never past where you stopped). Tap his furniture and he'll use it; tap the TV to skip or watch on top. When a game or emulator uses the bottom screen too, he still goes home but leaves a draggable house button there instead. It opens his messages about updates, crashes and anything he needs from you, plus a button to open his home. Going home is the new default for games and videos (Settings, Games & videos). New coro commands: home, messages and tv.
+- **2026-11-25:** Coronamon has a new personality and can talk out loud. His Grok brain follows his new character sheet: pure-hearted, justice-minded, optimistic and full of guts, with short, fired-up replies, and his fresh lines were rewritten to match. Double-tap him, or press Talk out loud in the Den's Talk tab, and he listens with xAI's speech-to-text, answers in character and talks back with xAI's text-to-speech (voice Kepler by default), then listens a few more seconds for your answer. When the screens dim he goes to his room on the bottom screen, and comes back out when you touch the Thor. Settings adds voice chat, his voice, voice speed, follow-up listening and what he does when the screens dim. New coro command: voice.

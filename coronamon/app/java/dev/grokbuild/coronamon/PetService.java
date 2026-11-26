@@ -21,6 +21,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Process;
+import android.os.SystemClock;
 import android.view.Choreographer;
 import android.view.Display;
 import android.view.Gravity;
@@ -48,7 +49,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         DisplayManager.DisplayListener {
     static volatile PetService instance;
 
-    static final String CH_PET = "pet", CH_EVENTS = "events";
+    static final String CH_PET = "pet", CH_EVENTS = "events", CH_VOICE = "voice";
     static final int NOTIF = 1;
     static final String ACTION_SWITCH = "dev.grokbuild.coronamon.SWITCH";
     static final String ACTION_TOGGLE = "dev.grokbuild.coronamon.TOGGLE";
@@ -67,6 +68,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     Diagnostics diag;
     Mind mind;
     Home home;
+    Voice voice;
+    Dimmer dimmer;
     final Handler main = new Handler(Looper.getMainLooper());
     private final Random rnd = new Random();
 
@@ -85,6 +88,9 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     /** The window index his bubble is on, ROOM_BUBBLE for the one in his room, or -1. */
     private int bubbleStage = -1;
     private static final int ROOM_BUBBLE = -2;
+    /** The line a voice conversation has up; it stays until the conversation lets it go. */
+    private Lines.Line voiceLine;
+    private long lastTapAt;
     private long lastStatusWrite;
     private boolean shizukuNagged;
     /** The package an install job is running for; its package broadcasts are the job's, not news. */
@@ -167,6 +173,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         int first = startStage();
         brain.place(first, stages.get(first).w * (0.3f + rnd.nextFloat() * 0.4f));
         home = new Home(this);
+        voice = new Voice(this);
+        dimmer = new Dimmer(this, main, this::dimChanged);
         getSystemService(DisplayManager.class).registerDisplayListener(this, main);
         foreground = new Foreground(this, registry, main, this::onTopApps);
         foreground.start();
@@ -207,6 +215,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         if (!selfUpdated()) brain.greet();
         history.add("start", Registry.SELF, "Coronamon", true, null, version());
         startLoop();
+        dimmer.start();
     }
 
     @Override
@@ -227,6 +236,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
     @Override
     public void onDestroy() {
         stopLoop();
+        voice.quit();
+        dimmer.quit();
         home.release();
         for (Win w : wins) {
             detach(w);
@@ -428,12 +439,14 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         // Home with nothing of his on screen (just the house button): he only needs to keep time.
         boolean unseen = brain.room != null && !home.roomShowing();
         try {
+            brain.actor.voice = voice.mouth();
+            brain.actor.hear = voice.hearing();
             brain.tick(Math.min(dt, unseen ? 0.3f : 0.06f));
             render();
         } catch (Exception e) {
             Log.w("frame", e);
         }
-        boolean fast = brain.fast() || speaking != null;
+        boolean fast = brain.fast() || speaking != null || voice.active();
         boolean slow = brain.asleep() && speaking == null;
         if (unseen) Choreographer.getInstance().postFrameCallbackDelayed(this, 250);
         else if (fast) Choreographer.getInstance().postFrameCallback(this);
@@ -479,6 +492,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         boolean any = false;
         for (Brain.Stage s : stages) any |= s.on;
         if (!any) {
+            voice.stop();
+            dimmer.stop();
             stopLoop();
             foreground.stop();
             return;
@@ -488,6 +503,12 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         }
         foreground.start();
         startLoop();
+        dimmer.start();
+    }
+
+    /** Android dimmed the screens because nobody's touched the Thor for a while, or they're bright again. */
+    private void dimChanged(boolean dim) {
+        home.check();
     }
 
     void sizeChanged() {
@@ -614,7 +635,9 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
 
     /** A button in (or a tap on) the bubble in his room. */
     void roomBubbleDone(int choice) {
-        if (bubbleStage == ROOM_BUBBLE) endSpeech(choice);
+        if (bubbleStage != ROOM_BUBBLE) return;
+        if (choice < 0 && voiceHeld()) voice.tap();
+        else endSpeech(choice);
     }
 
     private void ensureBubble(Win w) {
@@ -628,7 +651,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
 
             @Override
             public void dismissed() {
-                endSpeech(-1);
+                if (voiceHeld()) voice.tap();
+                else endSpeech(-1);
             }
         };
         w.blp = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT);
@@ -651,7 +675,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
             }
             brain.actor.talking = b.typing();
             long now = System.currentTimeMillis();
-            if (!b.typing() && speakUntil == 0) speakUntil = now + (b.hasButtons() ? 30_000 : b.readTime());
+            if (!b.typing() && speakUntil == 0 && !voiceHeld()) speakUntil = now + (b.hasButtons() ? 30_000 : b.readTime());
             if (speakUntil > 0 && now > speakUntil) {
                 endSpeech(-1);
                 return;
@@ -677,7 +701,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         Bubble b = w.bubble;
         brain.actor.talking = b.typing();
         long now = System.currentTimeMillis();
-        if (!b.typing() && speakUntil == 0) speakUntil = now + (b.hasButtons() ? 30_000 : b.readTime());
+        if (!b.typing() && speakUntil == 0 && !voiceHeld()) speakUntil = now + (b.hasButtons() ? 30_000 : b.readTime());
         if (speakUntil > 0 && now > speakUntil) {
             endSpeech(-1);
             return;
@@ -740,15 +764,76 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         if (p != null) p.chose(choice);
     }
 
+    // ---- his voice: the bubble while he listens, thinks and answers out loud ----
+
+    /** Shows a line from a conversation out loud. It stays up until the conversation lets it go (voiceRelease). */
+    void voiceBubble(String text, String note, String[] buttons, Brain.Prompt p) {
+        if (prompt != null && speaking != null) endSpeech(-1);
+        Lines.Line l = new Lines.Line("voice", text);
+        say(l, buttons, p);
+        if (speaking != l) return;
+        voiceLine = l;
+        if (note != null) voiceNote(note);
+    }
+
+    /** Changes the small line under his voice bubble (what you're saying) without typing the bubble out again. */
+    void voiceNote(String note) {
+        if (!voiceHeld()) return;
+        Bubble b = bubbleStage == ROOM_BUBBLE ? home.bubble() : bubbleStage >= 0 ? wins.get(bubbleStage).bubble : null;
+        if (b != null) b.note(note);
+    }
+
+    /** The conversation is done with its bubble: it goes after keepMs, after the usual reading time if keepMs < 0, or now. */
+    void voiceRelease(long keepMs) {
+        Lines.Line l = voiceLine;
+        voiceLine = null;
+        if (l == null || speaking != l) return;
+        if (keepMs == 0) endSpeech(-1);
+        else if (keepMs > 0 && prompt == null) speakUntil = System.currentTimeMillis() + keepMs;
+    }
+
+    private boolean voiceHeld() {
+        return voiceLine != null && speaking == voiceLine;
+    }
+
+    /** Opens his den so Android can ask you about the microphone. */
+    void askForMic() {
+        Intent i = new Intent(this, DenActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(DenActivity.EXTRA_MIC, true);
+        try {
+            startActivity(i, Screens.on(brain.stage().displayId));
+        } catch (Exception e) {
+            Log.w("den for the mic: " + e);
+        }
+    }
+
     // ---- touch ----
 
     @Override
     public void down(float rawX, float rawY) {
         brain.touchDown();
+        dimmer.poke();
     }
 
     @Override
     public void tap() {
+        petTapped();
+    }
+
+    /** A tap on him, on a screen or in his room. Two quick ones and he listens; mid-conversation, it's done talking or hush. */
+    void petTapped() {
+        dimmer.poke();
+        if (voice.active()) {
+            voice.tap();
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        boolean twice = now - lastTapAt < 450;
+        lastTapAt = twice ? 0 : now;
+        if (twice && settings.voice()) {
+            String why = voice.start("double-tap");
+            if (why != null) say(new Lines.Line("voice", why), null, null);
+            return;
+        }
         brain.tap();
     }
 
@@ -1214,7 +1299,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
                 "x", Math.round(brain.x), "y", Math.round(brain.y), "move", brain.actor.move.name,
                 "energy", Math.round(brain.energy * 100) / 100.0, "job", brain.job, "jobApp", brain.jobApp,
                 "speaking", speaking == null ? null : speaking.text, "shizuku", Shell.state(),
-                "foregroundWorking", foreground.working());
+                "foregroundWorking", foreground.working(), "dimmed", dimmer.dimmed(), "displayPolicy", dimmer.policy());
         JSONArray st = new JSONArray();
         for (Brain.Stage s : stages) {
             st.put(Util.obj("display", s.displayId, "name", s.name, "w", (int) s.w, "h", (int) s.h, "on", s.on,
@@ -1226,6 +1311,7 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         Util.put(o, "bugs", Util.obj("waiting", bugs.waiting(), "rev", bugs.rev(), "lastSync", bugs.lastSync()));
         Util.put(o, "grok", Util.obj("state", grokState, "since", grokSince, "msg", grokMsg, "last", grokLast));
         Util.put(o, "brain", mind.summary());
+        Util.put(o, "voice", voice.status());
         Util.put(o, "permissions", permissions());
         Util.put(o, "settings", settings.toJson());
         return o;
@@ -1242,7 +1328,8 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
                 "readLogs", checkSelfPermission(Manifest.permission.READ_LOGS) == PackageManager.PERMISSION_GRANTED,
                 "notifications", checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
                 "installs", getPackageManager().canRequestPackageInstalls(),
-                "allFiles", Environment.isExternalStorageManager());
+                "allFiles", Environment.isExternalStorageManager(),
+                "microphone", voice.micGranted());
     }
 
     // ---- notifications ----
@@ -1254,6 +1341,9 @@ public final class PetService extends Service implements Brain.Host, PetView.Tou
         nm.createNotificationChannel(pet);
         NotificationChannel ev = new NotificationChannel(CH_EVENTS, "Installs, crashes and updates", NotificationManager.IMPORTANCE_DEFAULT);
         nm.createNotificationChannel(ev);
+        NotificationChannel vc = new NotificationChannel(CH_VOICE, "Listening to you", NotificationManager.IMPORTANCE_LOW);
+        vc.setShowBadge(false);
+        nm.createNotificationChannel(vc);
     }
 
     private PendingIntent serviceIntent(String action, int code, String pkg) {

@@ -77,6 +77,31 @@ final class Settings {
         return p.getBoolean("freshLines", true);
     }
 
+    /** Talking out loud: double-tap him and he listens, then answers in his voice. Needs his Grok brain. */
+    boolean voice() {
+        return p.getBoolean("voice", true);
+    }
+
+    /** One of xAI's voices (Voice.VOICES), or a custom voice id. */
+    String voiceId() {
+        return p.getString("voiceId", Voice.VOICES[0]);
+    }
+
+    /** 0.7 to 1.5; 1 is xAI's normal pace. */
+    float voiceSpeed() {
+        return p.getFloat("voiceSpeed", 1.05f);
+    }
+
+    /** After he answers, he listens a few more seconds in case you answer back. */
+    boolean voiceFollowUp() {
+        return p.getBoolean("voiceFollowUp", true);
+    }
+
+    /** When Android dims the screens because nobody's touching the Thor, he goes to his room on the bottom screen. */
+    boolean dimHome() {
+        return p.getBoolean("dimHome", true);
+    }
+
     /** Where you dragged his house button on a screen, as {x, y} in pixels, or null. */
     int[] homeIcon(int displayId) {
         String[] xy = p.getString("homeIcon" + displayId, "").split(",");
@@ -113,7 +138,17 @@ final class Settings {
                 case "showSources":
                 case "brain":
                 case "freshLines":
+                case "voice":
+                case "voiceFollowUp":
+                case "dimHome":
                     e.putBoolean(key, Boolean.parseBoolean(value));
+                    break;
+                case "voiceId":
+                    if (!value.matches("[A-Za-z0-9_-]{1,64}")) return false;
+                    e.putString("voiceId", value);
+                    break;
+                case "voiceSpeed":
+                    e.putFloat("voiceSpeed", Math.max(0.7f, Math.min(1.5f, Float.parseFloat(value))));
                     break;
                 case "brainModel":
                     if (!java.util.Arrays.asList(Mind.MODELS).contains(value)) return false;
@@ -143,6 +178,8 @@ final class Settings {
     JSONObject toJson() {
         return Util.obj("size", size(), "chatter", chatter(), "games", games(), "nightSleep", nightSleep(),
                 "screen", screenPref(), "visible", visible(), "updates", updates(), "showSources", showSources(),
-                "brain", brain(), "brainModel", brainModel(), "brainCap", brainCap(), "freshLines", freshLines());
+                "brain", brain(), "brainModel", brainModel(), "brainCap", brainCap(), "freshLines", freshLines(),
+                "voice", voice(), "voiceId", voiceId(), "voiceSpeed", voiceSpeed(), "voiceFollowUp", voiceFollowUp(),
+                "dimHome", dimHome());
     }
 }

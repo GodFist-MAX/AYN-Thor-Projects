@@ -1,5 +1,6 @@
 package dev.grokbuild.coronamon;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -23,6 +24,9 @@ import java.util.Arrays;
 public final class DenActivity extends Activity {
     /** A capture from ReportActivity (JSON); the den opens the report form with it. */
     static final String EXTRA_REPORT = "report";
+    /** You double-tapped him without having OK'd the mic: the den asks, and he listens once you say yes. */
+    static final String EXTRA_MIC = "mic";
+    private static final int ASK_MIC = 7;
 
     private WebView web;
     private volatile String pendingReport;
@@ -56,6 +60,23 @@ public final class DenActivity extends Activity {
         web.addJavascriptInterface(new Js(), "Coro");
         web.loadUrl("file:///android_asset/den/index.html");
         setContentView(web);
+        if (getIntent().getBooleanExtra(EXTRA_MIC, false)) askMic();
+    }
+
+    private void askMic() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return;
+        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, ASK_MIC);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(code, permissions, results);
+        if (code != ASK_MIC) return;
+        boolean yes = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
+        PetService s = PetService.instance;
+        String why = yes && s != null ? s.voice.start("den") : null;
+        String msg = !yes ? "No mic, no voice chat. You can still type to me here!" : why != null ? why : "Thanks! I'm all ears. Go ahead and talk!";
+        if (web != null) web.evaluateJavascript("window.den && den.toast(" + JSONObject.quote(msg) + ")", null);
     }
 
     @Override
@@ -74,6 +95,7 @@ public final class DenActivity extends Activity {
             pendingReport = r;
             if (web != null) web.evaluateJavascript("window.den && den.checkReport()", null);
         }
+        if (intent.getBooleanExtra(EXTRA_MIC, false)) askMic();
     }
 
     private static String reply(Object data) {
@@ -363,7 +385,39 @@ public final class DenActivity extends Activity {
 
         @JavascriptInterface
         public String brain() {
-            return call(s -> s.mind.forDen());
+            return call(s -> {
+                JSONObject o = s.mind.forDen();
+                Util.put(o, "voice", s.voice.status());
+                return o;
+            });
+        }
+
+        /** He listens, as if you'd double-tapped him. */
+        @JavascriptInterface
+        public String voiceStart() {
+            return call(s -> {
+                String why = s.voice.start("den");
+                if (why != null) throw new IllegalStateException(why);
+                return s.voice.status();
+            });
+        }
+
+        @JavascriptInterface
+        public String voiceStop() {
+            return call(s -> {
+                s.voice.stop();
+                return s.voice.status();
+            });
+        }
+
+        /** A line in his voice, to hear how the voice and speed settings sound. */
+        @JavascriptInterface
+        public String voiceTry() {
+            return call(s -> {
+                String why = s.voice.sample();
+                if (why != null) throw new IllegalStateException(why);
+                return true;
+            });
         }
 
         @JavascriptInterface

@@ -37,6 +37,14 @@ His Grok brain (xAI API; the key is kept encrypted on the Thor and never printed
   coro brain yes|no [MSG:ACTION]       answer a button he offered (the newest one by default)
   coro brain on|off | cap USD | model smartest|fastest|grok-4.3 | lines [refresh|show]
 
+His voice (xAI speech-to-text and text-to-speech; double-tap him on the Thor to talk out loud):
+  coro voice [status]                  on/off, which voice, what he heard last and how long each step took
+  coro voice listen | stop             he listens now, like a double-tap | end a conversation
+  coro voice say "TEXT" [--pull DIR]   say something in his voice without the brain; --pull copies the audio here
+  coro voice hear WAV [--reply]        test audio (16-bit mono WAV, on the Mac or the Thor) instead of the mic;
+                                       prints what he heard, and with --reply he answers it out loud too
+  coro voice voices | use VOICE | speed 0.7-1.5 | on|off | sample
+
 Bugs, GitHub and Grok (corolink.py):
   coro sync [--dry-run] [--no-github]  take new bugs from the Thor, open/update GitHub issues, push waiting commits
   coro bugs [--all] [--local]          the bug log | coro bug ID [fixed [VERSION] | open | ignore | forget]
@@ -572,6 +580,109 @@ def cmd_brain(args):
         raise CoroError("unknown brain command %s (try coro help)" % sub)
 
 
+VOICE_DIR = "/sdcard/Coronamon/voice"
+
+
+def voice_report(v):
+    last = v.get("last") or {}
+    print("Voice chat: %s   voice %s at %.2fx   keep listening %s   mic %s   now %s" % (
+        "on" if v.get("on") else "off", v.get("voice"), v.get("speed", 1), "on" if v.get("followUp") else "off",
+        "allowed" if v.get("mic") else "not allowed yet", v.get("state")))
+    if last.get("heard") is not None:
+        print("Heard: %s" % (last["heard"] or "(nothing)"))
+    if last.get("reply"):
+        print("Said: %s" % last["reply"])
+    steps = [("speech-to-text ready", "sttReadyMs"), ("listening", "listenMs"), ("brain", "thinkMs"),
+             ("first sound", "ttsFirstAudioMs"), ("talking", "speakMs")]
+    times = ["%s %.1fs" % (name, last[k] / 1000.0) for name, k in steps if last.get(k)]
+    if times:
+        print("Took: " + ", ".join(times))
+    extra = []
+    if last.get("audioSec"):
+        extra.append("%.1fs of audio heard, loudest %.2f%s" % (last["audioSec"], last.get("peak", 0), ", mic muted by Android" if last.get("silenced") else ""))
+    if last.get("audioFrames"):
+        extra.append("%d chars spoken as %.1fs at %d Hz" % (last.get("ttsChars", 0), last["audioFrames"] / float(last.get("sampleRate") or 24000), last.get("sampleRate", 0)))
+    if extra:
+        print("Audio: " + "; ".join(extra))
+    if last.get("ttsError"):
+        print("Voice problem: " + last["ttsError"])
+    if v.get("error"):
+        print("Last problem: " + v["error"])
+
+
+def voice_wait(timeout=120):
+    end = time.time() + timeout
+    while time.time() < end:
+        v = need(bridge("voice", "status"))
+        if v.get("state") == "idle":
+            return v
+        time.sleep(0.5)
+    raise CoroError("he's still busy after %d seconds" % timeout)
+
+
+def cmd_voice(args):
+    sub = args.pop(0) if args else "status"
+    if sub == "status":
+        voice_report(need(bridge("voice", "status")))
+    elif sub == "listen":
+        need(bridge("voice", "listen"))
+        print("He's listening. Talk to the Thor, or run coro voice stop.")
+    elif sub == "stop":
+        need(bridge("voice", "stop"))
+        print("Stopped.")
+    elif sub == "sample":
+        need(bridge("voice", "sample"))
+        voice_report(voice_wait())
+    elif sub == "say":
+        pull = opt(args, "--pull")
+        text = " ".join(args).strip()
+        if not text:
+            raise CoroError('usage: coro voice say "TEXT" [--pull DIR]')
+        need(bridge("voice", "say", text=text))
+        voice_report(voice_wait())
+        if pull:
+            os.makedirs(os.path.expanduser(pull), exist_ok=True)
+            dest = os.path.join(os.path.expanduser(pull), "coronamon-voice-%s.wav" % time.strftime("%H%M%S"))
+            adb("pull", VOICE_DIR + "/last.wav", dest)
+            print(dest)
+    elif sub == "hear":
+        reply = flag(args, "--reply")
+        if not args:
+            raise CoroError("usage: coro voice hear FILE.wav [--reply]")
+        path = args[0]
+        if os.path.isfile(os.path.expanduser(path)):
+            remote = VOICE_DIR + "/test.wav"
+            sh("mkdir -p " + VOICE_DIR)
+            adb("push", os.path.expanduser(path), remote)
+            path = remote
+        voice_report(need(bridge("voice-hear", path, retries=1, reply=reply)))
+    elif sub == "voices":
+        r = need(bridge("voice-voices"))
+        voices = r.get("voices")
+        for v in voices if isinstance(voices, list) else [voices]:
+            if isinstance(v, dict):
+                name = v.get("voice_id") or v.get("id") or v.get("name")
+                rest = {k: x for k, x in v.items() if k not in ("voice_id", "id")}
+                print("%-8s %s" % (name, json.dumps(rest, ensure_ascii=False)))
+            else:
+                print(v)
+    elif sub == "use":
+        if not args:
+            raise CoroError("usage: coro voice use VOICE (kepler, sal, naksh, helix, rex... coro voice voices lists them all)")
+        r = need(bridge("setting", "voiceId", value=args[0]))
+        print("His voice: " + r["voiceId"])
+    elif sub == "speed":
+        if not args:
+            raise CoroError("usage: coro voice speed 0.7-1.5")
+        r = need(bridge("setting", "voiceSpeed", value=args[0]))
+        print("Voice speed: %.2fx" % r["voiceSpeed"])
+    elif sub in ("on", "off"):
+        need(bridge("setting", "voice", value="true" if sub == "on" else "false"))
+        print("Voice chat " + sub)
+    else:
+        raise CoroError("unknown voice command %s (try coro help)" % sub)
+
+
 def cmd_shizuku(args):
     r = need(bridge("shizuku", args[0] if args else None))
     print("Shizuku: %s%s" % (r["state"], " (a prompt is showing on the Thor; tap Allow)" if args and r["state"] == "running" else ""))
@@ -612,7 +723,8 @@ def cmd_setup(args):
     grants = ["appops set %s SYSTEM_ALERT_WINDOW allow" % PKG, "appops set %s MANAGE_EXTERNAL_STORAGE allow" % PKG,
               "appops set %s GET_USAGE_STATS allow" % PKG, "appops set %s REQUEST_INSTALL_PACKAGES allow" % PKG,
               "pm grant %s android.permission.READ_LOGS" % PKG, "pm grant %s android.permission.DUMP" % PKG,
-              "pm grant %s android.permission.POST_NOTIFICATIONS" % PKG, "dumpsys deviceidle whitelist +%s >/dev/null" % PKG]
+              "pm grant %s android.permission.POST_NOTIFICATIONS" % PKG, "pm grant %s android.permission.RECORD_AUDIO" % PKG,
+              "dumpsys deviceidle whitelist +%s >/dev/null" % PKG]
     print(sh("; ".join(grants)).strip() or "permissions granted")
     shz = [l[8:] for l in sh("pm path moe.shizuku.privileged.api").splitlines() if l.startswith("package:")]
     if shz:
@@ -645,7 +757,7 @@ COMMANDS = {
     "moves": cmd_moves, "hide": cmd_hide, "show": cmd_show, "summon": cmd_summon, "den": cmd_den, "shot": cmd_shot,
     "home": cmd_home, "messages": cmd_messages, "tv": cmd_tv,
     "setting": cmd_setting, "lines": cmd_lines, "shizuku": cmd_shizuku, "setup": cmd_setup, "log": cmd_log,
-    "brain": cmd_brain,
+    "brain": cmd_brain, "voice": cmd_voice,
 }
 
 

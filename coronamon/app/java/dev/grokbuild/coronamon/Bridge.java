@@ -47,6 +47,8 @@ public final class Bridge extends ContentProvider {
             String a = b64 && arg != null ? decode(arg) : arg;
             res = "diagnostics".equals(method) ? Diagnostics.forBridge(getContext())
                     : "brain-ask".equals(method) ? Mind.forBridgeAsk(getContext(), a)
+                    : "voice-hear".equals(method) ? Voice.forBridgeHear(getContext(), a, "true".equals(str(in, "reply", b64)))
+                    : "voice-voices".equals(method) ? Voice.forBridgeVoices(getContext())
                     : onMain(() -> handle(method, a, in, b64));
         } catch (Exception e) {
             Throwable c = e.getCause() != null ? e.getCause() : e;
@@ -259,6 +261,29 @@ public final class Bridge extends ContentProvider {
             case "brain-clear":
                 s.mind.clear(arg == null ? "chat" : arg);
                 return Util.obj("ok", true);
+            case "voice": {
+                String why = null;
+                switch (arg == null || arg.isEmpty() ? "status" : arg) {
+                    case "status":
+                        break;
+                    case "listen":
+                        s.showNow();
+                        why = s.voice.start("mac");
+                        break;
+                    case "stop":
+                        s.voice.stop();
+                        break;
+                    case "say":
+                        why = s.voice.sayOnly(str(in, "text", b64), true);
+                        break;
+                    case "sample":
+                        why = s.voice.sample();
+                        break;
+                    default:
+                        return Util.obj("ok", false, "error", "voice takes status, listen, stop, say or sample");
+                }
+                return why != null ? Util.obj("ok", false, "error", why) : ok(s.voice.status());
+            }
             case "home":
                 return s.home.command(arg == null || arg.isEmpty() ? "status" : arg, str(in, "screen", b64));
             case "messages":

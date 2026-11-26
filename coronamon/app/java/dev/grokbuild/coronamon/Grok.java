@@ -56,7 +56,7 @@ final class Grok {
         }
     }
 
-    private static String explain(int code, String body) {
+    static String explain(int code, String body) {
         String msg = body;
         try {
             JSONObject j = new JSONObject(body);

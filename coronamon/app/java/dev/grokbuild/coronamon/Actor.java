@@ -31,8 +31,13 @@ final class Actor {
     float gazeX, gazeY;
     boolean gazing;
     boolean talking;
+    /** How loud his voice is right now while he talks out loud, 0..1; -1 when no voice is playing. */
+    float voice = -1;
+    /** How loud you are while he listens to you, 0..1. */
+    float hear;
 
     private float shown = 1, turnT = 1;
+    private float mouthOpen;
     private float blinkIn = 2.5f, blinkT = 1;
     private float lookX, lookY, wanderIn = 1.5f, wanderX, wanderY;
 
@@ -117,9 +122,15 @@ final class Actor {
         p[LOOK_X] = Math.max(-1, Math.min(1, p[LOOK_X]));
         p[LOOK_Y] = Math.max(-1, Math.min(1, p[LOOK_Y]));
 
-        if (talking && p[EYES] > 0.2f) {
-            float flap = 0.18f + 0.3f * Math.abs(Moves.sn(clock, 2.7f)) * (0.6f + 0.4f * Moves.sn(clock, 0.9f));
-            p[MOUTH] = Math.max(p[MOUTH] * 0.35f, flap);
+        if (voice >= 0) {
+            mouthOpen += (voice - mouthOpen) * Math.min(1, dt * (voice > mouthOpen ? 30 : 14));
+            p[MOUTH] = Math.max(p[MOUTH] * 0.3f, 0.04f + 0.72f * mouthOpen);
+        } else {
+            mouthOpen = 0;
+            if (talking && p[EYES] > 0.2f) {
+                float flap = 0.18f + 0.3f * Math.abs(Moves.sn(clock, 2.7f)) * (0.6f + 0.4f * Moves.sn(clock, 0.9f));
+                p[MOUTH] = Math.max(p[MOUTH] * 0.35f, flap);
+            }
         }
 
         if (fade < 1) {

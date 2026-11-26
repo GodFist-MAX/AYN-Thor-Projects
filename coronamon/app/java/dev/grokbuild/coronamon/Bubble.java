@@ -30,10 +30,10 @@ final class Bubble extends View {
     private final Path shape = new Path();
     private final RectF r = new RectF();
 
-    private String message = "", source = "";
+    private String message = "", source = "", note = "";
     private String[] buttons = new String[0];
     private RectF[] buttonRects = new RectF[0];
-    private StaticLayout layout, sourceLayout;
+    private StaticLayout layout, sourceLayout, noteLayout;
     private long startedAt;
     private int shown;
     private float maxWidth;
@@ -69,6 +69,7 @@ final class Bubble extends View {
     void show(String msg, String src, String[] buttons) {
         this.message = msg == null ? "" : msg;
         this.source = src == null ? "" : src;
+        this.note = "";
         this.buttons = buttons == null ? new String[0] : buttons;
         buttonRects = new RectF[this.buttons.length];
         startedAt = SystemClock.uptimeMillis();
@@ -76,6 +77,15 @@ final class Bubble extends View {
         layout = null;
         requestLayout();
         postInvalidateOnAnimation();
+    }
+
+    /** A small line under the text that can change while the bubble is up, like what you're saying to him. */
+    void note(String n) {
+        n = n == null ? "" : n;
+        if (n.equals(note)) return;
+        note = n;
+        requestLayout();
+        invalidate();
     }
 
     boolean typing() {
@@ -96,6 +106,8 @@ final class Bubble extends View {
         layout = StaticLayout.Builder.obtain(message, 0, message.length(), text, w)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL).setLineSpacing(0, 1.08f).build();
         sourceLayout = source.isEmpty() ? null : StaticLayout.Builder.obtain("— " + source, 0, source.length() + 2, small, w)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL).build();
+        noteLayout = note.isEmpty() ? null : StaticLayout.Builder.obtain(note, 0, note.length(), small, w)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL).build();
     }
 
@@ -118,13 +130,14 @@ final class Bubble extends View {
     @Override
     protected void onMeasure(int wSpec, int hSpec) {
         float want = Math.min(maxWidth, StaticLayout.getDesiredWidth(message, text) + 2);
+        if (!note.isEmpty()) want = Math.max(want, Math.min(maxWidth, StaticLayout.getDesiredWidth(note, small) + 2));
         float btnW = 0;
         for (String b : buttons) btnW += btn.measureText(b) + 34 * dp;
         want = Math.max(want, Math.min(maxWidth, btnW));
         want = Math.max(want, 110 * dp);
         build((int) want);
         float h = pad() + nameH() + layout.getHeight() + (sourceLayout != null ? sourceLayout.getHeight() + 4 * dp : 0)
-                + buttonsH() + pad() + tailH();
+                + (noteLayout != null ? noteLayout.getHeight() + 4 * dp : 0) + buttonsH() + pad() + tailH();
         setMeasuredDimension((int) (want + pad() * 2 + 4 * dp), (int) (h + 4 * dp));
     }
 
@@ -174,6 +187,13 @@ final class Bubble extends View {
         }
         c.restore();
         y += layout.getHeight();
+        if (noteLayout != null) {
+            c.save();
+            c.translate(x, y + 4 * dp);
+            noteLayout.draw(c);
+            c.restore();
+            y += noteLayout.getHeight() + 4 * dp;
+        }
         if (sourceLayout != null && shown >= message.length()) {
             c.save();
             c.translate(x, y + 4 * dp);

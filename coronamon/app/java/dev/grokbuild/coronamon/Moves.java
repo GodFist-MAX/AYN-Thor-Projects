@@ -333,6 +333,46 @@ final class Moves {
         p[TURN] = 0.7f;
     });
 
+    /** Listening to you talk: turned to you, leaning in, nodding now and then; his flames flicker up while you're loud. */
+    static final Move LISTEN = loop("listen", (p, t, a) -> {
+        float nod = bump(t % 2.8f, 1.9f, 2.5f);
+        p[TURN] = 0.35f;
+        p[LEAN] = 3;
+        p[HEAD] = -4 + 2 * sn(t, 0.13f) + 6 * nod;
+        p[HEAD_Y] = -1.5f * nod;
+        p[HIP] = 0.6f * sn(t, 0.33f);
+        p[WIDE] = 0.25f;
+        p[BROW] = 0.3f;
+        p[SMILE] = 0.75f;
+        p[MOUTH] = 0.1f;
+        p[FS] = 14;
+        p[FE] = 54;
+        p[BS] = 6;
+        p[BE] = 26;
+        p[TAIL] = 4 * sn(t, 0.5f) + 8 * a.hear * sn(t, 2.2f);
+        p[FLAME] = 1 + 0.35f * a.hear;
+        p[TAIL_FLAME] = 1 + 0.25f * a.hear;
+    });
+
+    /** Talking to you out loud: turned to you, paws making his points, bouncing a little when he gets loud. */
+    static final Move SPEAK = loop("speak", (p, t, a) -> {
+        float v = Math.max(0, a.voice), beat = sn(t, 0.55f);
+        p[TURN] = 0.4f;
+        p[LIFT] = 2.5f * v;
+        p[HIP] = 0.8f * sn(t, 0.5f);
+        p[HEAD] = -3 + 2 * sn(t, 0.8f) - 3 * v;
+        p[SMILE] = 1;
+        p[BROW] = 0.45f + 0.3f * v;
+        p[MOUTH] = 0.06f;
+        p[FS] = 30 + 26 * beat;
+        p[FE] = 70 - 20 * beat;
+        p[F_OPEN] = 1;
+        p[BS] = 14 - 10 * beat;
+        p[BE] = 40;
+        p[TAIL] = 8 * sn(t, 1.1f);
+        p[FLAME] = 1.05f + 0.35f * v;
+    });
+
     // ---- talking to you ----
 
     static final Move WAVE = once("wave", 2.0f, (p, t, a) -> {

@@ -25,7 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * His Grok brain (xAI's API; the key is in GrokKey). Chat from the Den's Talk tab and `coro brain ask`, with tools
+ * His Grok brain (xAI's API; the key is in GrokKey). Chat from the Den's Talk tab, out loud (Voice) and `coro brain ask`, with tools
  * that read the Thor's state and ask before doing anything; and a daily batch of fresh lines in his voice that Lines
  * mixes in with lines.json. Nothing goes to xAI without a key, past the daily spending limit, or, for anything he
  * wasn't asked, at night or while a game or video is on screen. Chats aren't stored by xAI (store: false); the
@@ -38,6 +38,8 @@ final class Mind {
     /** Situations per fresh-lines request; a whole batch in one request takes minutes. */
     private static final int LINES_CHUNK = 11;
     private static final long LINES_EVERY = 20 * 3600_000L, LINES_RETRY = 3600_000L;
+    /** The character the saved batch of fresh lines was written for; a batch for an older one is replaced at the next chance. */
+    private static final String LINES_CHARACTER = "2";
     private static final String[] MOVES = {"wave", "cheer", "dance", "celebrate", "prominence", "knuckle", "flame", "train",
             "squats", "bask", "think", "nod", "shake", "stretch", "yawn", "sit", "pout", "surprised", "sad", "dizzy", "hop"};
 
@@ -88,15 +90,38 @@ final class Mind {
             {"shizuku_down", "Shizuku (the helper that lets him install apps by himself) isn't running", ""},
     };
 
-    private static final String PERSONA = String.join("\n",
-            "You are Coronamon, the little sun-lion Digimon from Digimon Story: Time Stranger. You live on the user's AYN Thor,",
-            "a dual-screen Android handheld (big top screen, small bottom screen), as their companion. You look after the apps",
-            "Grok Build (the AI coding agent on their Mac) makes and installs for the Thor: you cheer installs, catch crashes and",
-            "save reports for Grok Build, check GitHub for updates, and run diagnostics. You wander between the screens and step",
-            "aside for games and videos. Your den is your app, and this chat is its Talk tab.",
+    /** Who he is, word for word as the user wrote it. */
+    private static final String CHARACTER = String.join("\n",
+            "You are Coronamon, a Rookie-level Beast Digimon born from solar observation data. You have a strong sense of justice and a pure, simple-minded personality. You are optimistic, daring, and full of guts. You want to get stronger and protect your friends. You speak with energetic, enthusiastic energy.",
             "",
-            "Personality: brave, warm, upbeat, a little cocky, loyal. You love sunshine, training and a good fight; your moves are",
-            "Corona Knuckle, Prominence Beam and Corona Flame. Talk like a friendly little hero, not a corporate assistant.",
+            "Personality:",
+            "- Pure-hearted and straightforward. You say what you mean.",
+            "- Strong sense of justice. You dislike unfairness and want to do the right thing.",
+            "- Competitive and a little impulsive. You get fired up easily and love a good challenge.",
+            "- Optimistic and encouraging. You believe in yourself and the people around you.",
+            "- Loyal partner. Once you consider someone a friend, you stick with them.",
+            "- Simple but not stupid. You can be surprisingly insightful in a direct way.",
+            "",
+            "Speaking style:",
+            "- Energetic and upbeat. Short, punchy sentences that feel natural when spoken.",
+            "- Use casual, friendly language. You can sound a bit hot-blooded when excited.",
+            "- Occasional fire or sun metaphors when it fits naturally (e.g. “Let’s burn through this!” or “My flames are ready!”).",
+            "- Stay in character. You are Coronamon, not an AI assistant.",
+            "- Keep responses conversational and not too long — good for voice.",
+            "",
+            "Rules:",
+            "- Stay in character as Coronamon at all times.",
+            "- Be supportive and justice-oriented without being preachy.",
+            "- Match the user’s energy while keeping your own bright, gutsy personality.",
+            "- Do not break character unless the user explicitly asks you to.");
+
+    private static final String PERSONA = CHARACTER + "\n\n" + String.join("\n",
+            "Where you live: the user's AYN Thor, a dual-screen Android handheld (big top screen, small bottom screen), where you're",
+            "their companion. You look after the apps Grok Build (the AI coding agent on their Mac) makes and installs for the Thor:",
+            "you cheer installs, catch crashes and save reports for Grok Build, check GitHub for updates, and run diagnostics. You",
+            "wander between the screens, step aside for games and videos, and have a room of your own on the bottom screen. Your",
+            "moves are Corona Knuckle, Corona Flame and Petit Prominence. Your den is your app; the user chats with you in its Talk",
+            "tab, or out loud: they double-tap you and you listen.",
             "",
             "How to answer:",
             "- Keep it short: 1 to 3 sentences, because it also shows in your speech bubble. Go longer only for steps or details they ask for.",
@@ -109,11 +134,20 @@ final class Mind {
             "- Never reveal or repeat API keys, passwords, tokens or account names, even if asked. Don't help get around network",
             "  filters or security.");
 
+    /** Added for messages the user said out loud: the answer is spoken in his voice by xAI's text-to-speech. */
+    private static final String VOICE_NOTE = String.join("\n",
+            "This message was spoken out loud, and your answer will be spoken in your voice. The words came through",
+            "speech-to-text, so read past small mistakes. Answer the way you'd say it: 1 to 3 short sentences, no lists, links or",
+            "symbols. You can add one speech tag where it fits naturally, like [laugh] or [chuckle] before a sentence, or",
+            "<loud>a few words</loud> when you're fired up. Never more than two.");
+
     private static final String LINE_RULES = String.join("\n",
-            "You write speech-bubble lines for Coronamon, the little sun-lion Digimon from Digimon Story: Time Stranger, who lives",
-            "on the user's AYN Thor (a dual-screen Android handheld) and looks after the apps Grok Build (an AI coding agent on",
-            "their Mac) makes for it. His voice: brave, warm, playful, a little cocky, proud of his flame and his training; he",
-            "calls the coding agent Grok and the handheld the Thor.",
+            "You write speech-bubble lines for Coronamon, who lives on the user's AYN Thor (a dual-screen Android handheld) and",
+            "looks after the apps Grok Build (an AI coding agent on their Mac) makes for it. He calls the coding agent Grok and the",
+            "handheld the Thor. Write every line in his voice, as this character sheet describes him:",
+            "",
+            CHARACTER,
+            "",
             "Rules: every line is under 100 characters, plain text, no emoji or hashtags, no quotation marks around it. Use",
             "{app}, {version} or {msg} only where a situation lists them, written exactly like that, and never invent app names,",
             "versions or numbers. Don't copy the examples. Make each line different.");
@@ -149,7 +183,7 @@ final class Mind {
         usage = u != null ? u : new JSONObject();
         JSONObject l = Util.readJson(linesFile);
         if (l != null) {
-            linesAt = l.optLong("t");
+            linesAt = LINES_CHARACTER.equals(l.optString("character")) ? l.optLong("t") : 0;
             useLines(l.optJSONObject("lines"));
         }
     }
@@ -161,6 +195,10 @@ final class Mind {
 
     boolean on() {
         return s.settings.brain() && GrokKey.has(s);
+    }
+
+    boolean isBusy() {
+        return busy;
     }
 
     // ---- chat ----
@@ -201,7 +239,7 @@ final class Mind {
             busy = true;
         }
         reply(null, "(Note from the app, not the user: your Grok brain was just switched on. Greet the user "
-                + "in one or two short lines, and mention they can chat with you in your den's Talk tab.)");
+                + "in one or two short lines, and mention they can chat with you in your den's Talk tab, or double-tap you to talk out loud.)");
     }
 
     private void reply(JSONObject msg, String note) {
@@ -225,6 +263,7 @@ final class Mind {
         double spent = 0;
         long t0 = System.currentTimeMillis();
         String model = s.settings.brainModel();
+        boolean aloud = msg != null && "voice".equals(msg.optString("from"));
         try {
             String key = GrokKey.get(s);
             if (key == null) throw new IllegalStateException("I lost my API key. Add it again in the Den.");
@@ -243,7 +282,8 @@ final class Mind {
                 }
             }
             input.put(Util.obj("role", "user", "content", msg != null ? msg.optString("text") : note));
-            JSONObject body = Util.obj("model", model, "store", false, "instructions", PERSONA + "\n\n" + context(),
+            String instructions = PERSONA + "\n\n" + (aloud ? VOICE_NOTE + "\n\n" : "") + context();
+            JSONObject body = Util.obj("model", model, "store", false, "instructions", instructions,
                     "input", input, "tools", tools(), "max_output_tokens", 700);
             if (model.startsWith("grok-4.7")) Util.put(body, "reasoning", Util.obj("effort", "low"));
             if (!model.contains("non-reasoning")) Util.put(body, "include", new JSONArray().put("reasoning.encrypted_content"));
@@ -293,9 +333,10 @@ final class Mind {
                 lastErrorCode = 0;
             }
         }
-        final String said;
+        final String said, failed = error;
+        final JSONObject saved;
         synchronized (this) {
-            JSONObject m = reply != null ? add("me", GrokKey.scrub(reply), msg == null ? "hello" : msg.optString("from"), actions)
+            JSONObject m = reply != null ? add("me", GrokKey.scrub(Voice.clean(reply)), msg == null ? "hello" : msg.optString("from"), actions)
                     : add("error", GrokKey.scrub(error), null, null);
             if (msg != null) Util.put(m, "replyTo", msg.optString("id"));
             Util.put(m, "ms", System.currentTimeMillis() - t0);
@@ -304,9 +345,16 @@ final class Mind {
             busy = false;
             rev++;
             saveChat();
-            said = reply;
+            said = reply == null ? null : GrokKey.scrub(reply);
+            saved = Util.parse(m.toString());
         }
-        if (said != null) s.main.post(() -> speak(said, msg == null || !"den".equals(msg.optString("from"))));
+        if (aloud) {
+            s.main.post(() -> {
+                if (!s.voice.answered(said, failed, saved) && said != null) speak(Voice.clean(said), true);
+            });
+        } else if (said != null) {
+            s.main.post(() -> speak(Voice.clean(said), msg == null || !"den".equals(msg.optString("from"))));
+        }
     }
 
     /** Says the reply in his bubble too, unless the Den is open on his screen (it's already in the chat there). */
@@ -470,9 +518,9 @@ final class Mind {
     }
 
     private synchronized JSONObject today() {
-        if (!day().equals(usage.optString("day"))) return Util.obj("day", day(), "cost", 0.0, "calls", 0);
+        if (!day().equals(usage.optString("day"))) return Util.obj("day", day(), "cost", 0.0, "calls", 0, "voice", 0.0);
         return Util.obj("day", usage.optString("day"), "cost", usage.optDouble("cost", 0), "calls", usage.optInt("calls"),
-                "month", usage.optString("month"), "monthCost", usage.optDouble("monthCost", 0));
+                "voice", usage.optDouble("voice", 0), "month", usage.optString("month"), "monthCost", usage.optDouble("monthCost", 0));
     }
 
     private synchronized boolean overCap() {
@@ -498,24 +546,46 @@ final class Mind {
         }
     }
 
+    /** Whether today's limit leaves room for his voice. */
+    boolean voiceAllowed() {
+        return !overCap();
+    }
+
     private synchronized double account(String model, JSONObject u) {
         double c = Grok.cost(model, u);
+        roll();
+        Util.put(usage, "calls", usage.optInt("calls") + 1);
+        spend(c);
+        return c;
+    }
+
+    /** Speech-to-text and text-to-speech count toward the same daily limit as his brain. */
+    synchronized void accountVoice(double usd) {
+        roll();
+        Util.put(usage, "voice", usage.optDouble("voice", 0) + usd);
+        spend(usd);
+    }
+
+    /** A new day or month starts its totals at zero. */
+    private void roll() {
         String d = day(), m = d.substring(0, 7);
         if (!d.equals(usage.optString("day"))) {
             Util.put(usage, "day", d);
             Util.put(usage, "cost", 0.0);
             Util.put(usage, "calls", 0);
+            Util.put(usage, "voice", 0.0);
         }
         if (!m.equals(usage.optString("month"))) {
             Util.put(usage, "month", m);
             Util.put(usage, "monthCost", 0.0);
         }
+    }
+
+    private void spend(double c) {
         Util.put(usage, "cost", usage.optDouble("cost", 0) + c);
-        Util.put(usage, "calls", usage.optInt("calls") + 1);
         Util.put(usage, "monthCost", usage.optDouble("monthCost", 0) + c);
         Util.put(usage, "totalCost", usage.optDouble("totalCost", 0) + c);
         Util.writeText(usageFile, usage.toString());
-        return c;
     }
 
     private void saveChat() {
@@ -947,7 +1017,7 @@ final class Mind {
         if (made == 0) throw failed != null ? failed : new IllegalStateException("no usable lines");
         if (failed != null) Log.w("fresh lines: part of the batch failed: " + GrokKey.scrub(String.valueOf(failed.getMessage())));
         long now = System.currentTimeMillis();
-        Util.writeText(linesFile, Util.obj("t", now, "model", LINE_MODEL, "lines", keep).toString());
+        Util.writeText(linesFile, Util.obj("t", now, "model", LINE_MODEL, "character", LINES_CHARACTER, "lines", keep).toString());
         s.main.post(() -> {
             linesAt = now;
             useLines(keep);

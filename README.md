@@ -25,6 +25,7 @@ Commits are in the order the projects were last updated, and each is dated to wh
 - **2026-11-18:** Coronamon gets a Grok brain: chat in the Den's Talk tab, plus fresh lines every day
 - **2026-11-21:** CrossBar: video › Folders now shows the real folder tree, with internal storage and the SD card merged (show and season folders, episodes i…; AniDeck 2.0: a native app on Aniyomi extensions, with its own player and offline downloads; AniDeck: Re:ANIME (reanime.cz) as a recommended source, ready-made MKV downloads, sound in separate-audio downloads, and intro marks offline; no more gray haze over the bottom screen
 - **2026-11-22:** Recently watched videos for Coronamon's TV; Played downloads for Coronamon's TV; Coronamon's home, house button and messages
+- **2026-11-25:** Coronamon: coronamon has a new personality and can talk out loud
 
 ## Building
 

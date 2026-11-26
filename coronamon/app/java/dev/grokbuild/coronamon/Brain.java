@@ -94,6 +94,10 @@ final class Brain {
     float cheer;
     private float cheerIn = 8, cheerFor;
 
+    /** Where a conversation out loud is (Voice): he stops everything else to listen, think or talk to you. */
+    static final int V_NONE = 0, V_LISTEN = 1, V_THINK = 2, V_SPEAK = 3;
+    private int voice;
+
     Brain(Host host) {
         this.host = host;
     }
@@ -180,7 +184,7 @@ final class Brain {
         actor.facing = facing;
         actor.vy = vy;
         if (air && actor.move == Moves.TUMBLE) actor.spin += spinRate * dt;
-        actor.gazing = (host.speaking() || lookBack) && !asleep();
+        actor.gazing = (host.speaking() || lookBack || voice != V_NONE) && !asleep();
         actor.gazeX = lookBack ? -facing : 0;
         actor.gazeY = lookBack ? 0.3f : 0.1f;
         lookBack = false;
@@ -407,8 +411,30 @@ final class Brain {
         return h >= 8 && h < 18;
     }
 
+    /** The conversation moved on (or ended, V_NONE). */
+    void voice(int phase) {
+        if (phase == voice) return;
+        voice = phase;
+        if (held || air) return;
+        interrupt();
+        if (phase != V_NONE) {
+            energy = Math.max(energy, 0.35f);
+            planVoice();
+        }
+    }
+
+    private void planVoice() {
+        if (room != null && seat != Room.NONE) tasks.add(new Stand());
+        Moves.Move m = voice == V_LISTEN ? Moves.LISTEN : voice == V_THINK ? Moves.THINK : Moves.SPEAK;
+        tasks.add(new Play(m, 600));
+    }
+
     private void plan() {
         Stage s = stage();
+        if (voice != V_NONE) {
+            planVoice();
+            return;
+        }
         if (room != null) {
             planHome();
             return;
@@ -666,7 +692,7 @@ final class Brain {
 
     private void chatter(float dt) {
         int level = host.settings().chatter();
-        if (level <= 0 || ghost || asleep() || held || air || job != null) return;
+        if (level <= 0 || ghost || asleep() || held || air || job != null || voice != V_NONE) return;
         chatIn -= dt;
         if (chatIn > 0) return;
         chatIn = level >= 2 ? 40 + rnd.nextFloat() * 80 : 100 + rnd.nextFloat() * 160;
@@ -780,7 +806,7 @@ final class Brain {
     }
 
     void appOpened(String pkg, String label) {
-        if (asleep() || ghost || held || air || job != null) return;
+        if (asleep() || ghost || held || air || job != null || voice != V_NONE) return;
         Long last = lastSaid.get(pkg);
         long now = System.currentTimeMillis();
         if (last != null && now - last < 15 * 60_000L) return;

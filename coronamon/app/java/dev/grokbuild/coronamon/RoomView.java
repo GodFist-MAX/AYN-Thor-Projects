@@ -133,6 +133,11 @@ final class RoomView extends View {
 
     // ---- touch ----
 
+    /** Whether a touch at x, y (this view's pixels) lands on him. */
+    boolean onPet(float x, float y) {
+        return hitPet((x - ox) / scale, (y - oy) / scale);
+    }
+
     private boolean hitPet(float ux, float uy) {
         if (scene.pose == null) return false;
         if (Room.tucked(scene)) return ux > 90 && ux < 440 && uy > 520 && uy < 730;
